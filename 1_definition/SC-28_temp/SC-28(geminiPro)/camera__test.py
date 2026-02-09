@@ -38,9 +38,10 @@ def main():
             # ---------------------------------------------------------
             # 3. 結果表示
             # ---------------------------------------------------------
-            # 面積をパーセントに変換 (640x480 = 307200 px)
-            area_percent = (area_px / 307200) * 100
-            
+            # 面積をパーセントに変換 (w x h = px)
+            h, w = frame.shape[:2]
+            area_percent = (area_px / (w * h)) * 100
+
             # FPS計算
             proc_time = time.time() - start_time
             fps = 1.0 / proc_time if proc_time > 0 else 0
