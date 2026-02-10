@@ -8,7 +8,7 @@ def main():
 
     # ---- 1. キャリブレーション確認 ----
     if not sensor.calib_ok:
-        print("❌ Calibration failed")
+        print("Calibration failed")
         return
     print("✅ Calibration OK")
     print("digT:", sensor.digT)
