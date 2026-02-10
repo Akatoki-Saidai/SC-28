@@ -4,6 +4,8 @@
 # - Shared pigpio instance support (pi injection)
 # - Safe I/O: read errors -> None, write errors -> False
 # - Automatic I2C address detection (0x28 or 0x29)
+# - Added calibration status check
+# - Fixed gyroscope scaling
 
 import time
 import pigpio
@@ -33,6 +35,7 @@ BNO055_QUATERNION_DATA_W_LSB_ADDR = 0x20
 BNO055_LINEAR_ACCEL_DATA_X_LSB_ADDR = 0x28
 BNO055_GRAVITY_DATA_X_LSB_ADDR = 0x2E
 BNO055_TEMP_ADDR = 0x34
+BNO055_CALIB_STAT_ADDR = 0x35  # ★追加: キャリブレーションステータス
 
 BNO055_OPR_MODE_ADDR = 0x3D
 BNO055_PWR_MODE_ADDR = 0x3E
@@ -231,6 +234,20 @@ class BNO055:
         sw = ((sw_msb << 8) | sw_lsb) & 0xFFFF
         return (sw, bl, accel, mag, gyro)
 
+    def get_calibration_status(self):
+        """
+        システム、ジャイロ、加速度、磁気のキャリブレーション状態を返す (0=未補正, 3=完全補正)
+        戻り値: (sys, gyro, accel, mag)
+        """
+        calib = self._read_byte(BNO055_CALIB_STAT_ADDR)
+        if calib is None: return None
+        return (
+            (calib >> 6) & 0x03, # Sys
+            (calib >> 4) & 0x03, # Gyro
+            (calib >> 2) & 0x03, # Accel
+            calib & 0x03         # Mag
+        )
+
     def temperature(self): return self._read_signed_byte(BNO055_TEMP_ADDR)
 
     def euler(self):
@@ -253,7 +270,8 @@ class BNO055:
 
     def gyroscope(self):
         vec = self._read_vector(BNO055_GYRO_DATA_X_LSB_ADDR, 3)
-        return [vec[0]/900.0, vec[1]/900.0, vec[2]/900.0] if vec else None
+        # ★修正: 900.0 (rad/s) -> 16.0 (deg/s) に変更
+        return [vec[0]/16.0, vec[1]/16.0, vec[2]/16.0] if vec else None
 
     def linear_acceleration(self):
         vec = self._read_vector(BNO055_LINEAR_ACCEL_DATA_X_LSB_ADDR, 3)

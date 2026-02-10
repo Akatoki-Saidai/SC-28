@@ -10,12 +10,14 @@ def main():
         return
 
     print("計測開始 (Ctrl+C で終了)")
+    print("Cal: [System, Gyro, Accel, Mag] (0=未補正 ~ 3=完了)")
     print("-" * 50)
 
     try:
         while True:
             # --- 1. すべてのデータを取得 ---
             # 戻り値は [x, y, z] のリストか、失敗時は None になります
+            calib = imu.get_calibration_status()  # ★追加: キャリブレーション状態
             temp = imu.temperature()          # 温度 [℃]
             euler = imu.euler()               # オイラー角 [Heading, Roll, Pitch]
             acc = imu.accelerometer()         # 加速度 (重力込み) [m/s^2]
@@ -27,6 +29,10 @@ def main():
             # --- 2. 画面に表示 (Noneチェック付き) ---
             output = []
             
+            # キャリブレーション状態 (Sys, Gyr, Acc, Mag)
+            if calib: output.append(f"Cal:{calib[0]},{calib[1]},{calib[2]},{calib[3]}")
+            else:     output.append("Cal:--")
+
             # 温度
             output.append(f"T:{temp}C" if temp is not None else "T:--")
 
