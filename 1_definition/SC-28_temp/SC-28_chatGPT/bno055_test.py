@@ -11,10 +11,7 @@ BNO055 実機動作確認スクリプト（pigpio + I2C）
 2) I2C 0x28 / 0x29 の自動検出（どちらか見つけたら使用）
 3) begin() の成否確認
 4) revision 読み取り確認
-5) Euler/Quat/Accel/Gyro/Mag/Gravity を一定回数取得して
-   - None率（読み取り失敗率）
-   - 値の簡易妥当性（NaN/inf、Quatのnorm、温度の範囲など）
-   を表示
+5) 全センサデータ（Euler/Quat/Accel/Gyro/Mag/Gravity）を取得表示
 """
 
 import math
@@ -39,8 +36,6 @@ def detect_address(pi, bus=1, candidates=(BNO055_ADDRESS_A, BNO055_ADDRESS_B)):
     for addr in candidates:
         try:
             h = pi.i2c_open(bus, addr)
-            # 0バイト読み取りはできないので、適当なレジスタ(0x00) 1byte読む。
-            # bno055_fixed側と同様、負値はエラー。
             v = pi.i2c_read_byte_data(h, 0x00)
             pi.i2c_close(h)
             if v is not None and v >= 0:
@@ -101,7 +96,9 @@ def main():
     temp_out_of_range = 0
 
     print("\n--- Sampling ---")
-    print(f"Samples: {N}, interval: {interval_s}s\n")
+    print(f"Samples: {N}, interval: {interval_s}s")
+    print("表示フォーマット: [Index] T=温度 Euler=角 Quat=四元数 Acc=加速度 Gyro=角速度 Mag=磁気 Grav=重力") 
+    print("")
 
     for i in range(N):
         t = imu.temperature()
@@ -112,47 +109,57 @@ def main():
         m = imu.magnetometer()
         gr = imu.gravity()
 
+        # --- 統計収集 ---
         if t is None:
             none_counts["temp"] += 1
         else:
-            # BNO055温度はだいたい -40〜+85°C 程度が妥当
             if not (-40 <= t <= 85):
                 temp_out_of_range += 1
 
-        if e is None:
-            none_counts["euler"] += 1
-        if q is None:
-            none_counts["quat"] += 1
-        if a is None:
-            none_counts["accel"] += 1
-        if g is None:
-            none_counts["gyro"] += 1
-        if m is None:
-            none_counts["mag"] += 1
-        if gr is None:
-            none_counts["grav"] += 1
+        if e is None: none_counts["euler"] += 1
+        if q is None: none_counts["quat"] += 1
+        if a is None: none_counts["accel"] += 1
+        if g is None: none_counts["gyro"] += 1
+        if m is None: none_counts["mag"] += 1
+        if gr is None: none_counts["grav"] += 1
 
-        # クォータニオンのノルムはだいたい 1 付近（大きくズレるなら読み取り/スケール問題）
         nrm = quat_norm(q)
         if nrm is not None and not (0.6 <= nrm <= 1.4):
             quat_norm_bad += 1
 
-        # 表示（軽め）
+        # --- 表示（全データ出力） ---
         if i % 10 == 0:
-            msg = f"[{i:02d}] "
-            if t is None:
-                msg += "T=None "
-            else:
-                msg += f"T={t:3d}C "
-            if e is None:
-                msg += "Euler=None "
-            else:
-                msg += f"Euler(h,r,p)={e[0]:6.1f},{e[1]:6.1f},{e[2]:6.1f} "
-            if q is None:
-                msg += "Quat=None "
-            else:
-                msg += f"Quat(w,x,y,z)={q[0]:+.3f},{q[1]:+.3f},{q[2]:+.3f},{q[3]:+.3f} "
-            print(msg)
+            parts = []
+            parts.append(f"[{i:02d}]")
+
+            # 温度
+            parts.append(f"T={t}C" if t is not None else "T=None")
+
+            # Euler (Heading, Roll, Pitch)
+            if e: parts.append(f"Eul={e[0]:.1f},{e[1]:.1f},{e[2]:.1f}")
+            else: parts.append("Eul=None")
+
+            # Quaternion (w, x, y, z)
+            if q: parts.append(f"Qua={q[0]:.2f},{q[1]:.2f},{q[2]:.2f},{q[3]:.2f}")
+            else: parts.append("Qua=None")
+
+            # Acceleration (x, y, z)
+            if a: parts.append(f"Acc={a[0]:.2f},{a[1]:.2f},{a[2]:.2f}")
+            else: parts.append("Acc=None")
+
+            # Gyroscope (x, y, z)
+            if g: parts.append(f"Gyr={g[0]:.2f},{g[1]:.2f},{g[2]:.2f}")
+            else: parts.append("Gyr=None")
+
+            # Magnetometer (x, y, z)
+            if m: parts.append(f"Mag={m[0]:.1f},{m[1]:.1f},{m[2]:.1f}")
+            else: parts.append("Mag=None")
+
+            # Gravity Vector (x, y, z)
+            if gr: parts.append(f"Grv={gr[0]:.2f},{gr[1]:.2f},{gr[2]:.2f}")
+            else: parts.append("Grv=None")
+
+            print(" ".join(parts))
 
         time.sleep(interval_s)
 
@@ -166,9 +173,7 @@ def main():
     if quat_norm_bad:
         print(f"⚠ quaternion norm suspicious: {quat_norm_bad}/{N} (norm not in [0.6, 1.4])")
 
-    # 終了
     imu.close()
-    # 共有 pi を止めるかは運用次第（ここでは止めない）
     print("\n=== BNO055 HW CHECK END ===")
 
 
