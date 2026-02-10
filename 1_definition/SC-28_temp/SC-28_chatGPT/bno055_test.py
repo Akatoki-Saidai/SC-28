@@ -4,14 +4,11 @@
 BNO055 実機動作確認スクリプト（pigpio + I2C）
 - bno055_fixed.py が同じフォルダにある前提
 - pigpio daemon が起動している前提（sudo pigpiod）
-- I2C 有効化済み前提（raspi-config 等）
 
 できること:
 1) pigpio 接続確認
-2) I2C 0x28 / 0x29 の自動検出（どちらか見つけたら使用）
-3) begin() の成否確認
-4) revision 読み取り確認
-5) 全センサデータ（Euler/Quat/Accel/Gyro/Mag/Gravity）を取得表示
+2) I2C 0x28 / 0x29 の自動検出
+3) 全センサデータ（Euler/Quat/Accel/LinAcc/Gyro/Mag/Gravity）の取得・表示
 """
 
 import math
@@ -20,23 +17,12 @@ import pigpio
 
 from bno055 import BNO055, BNO055_ADDRESS_A, BNO055_ADDRESS_B, OPERATION_MODE_NDOF
 
-
-def is_finite_list(xs):
-    return xs is not None and all(isinstance(x, (int, float)) and math.isfinite(x) for x in xs)
-
-
-def quat_norm(q):
-    if not is_finite_list(q) or len(q) != 4:
-        return None
-    return math.sqrt(sum(v * v for v in q))
-
-
 def detect_address(pi, bus=1, candidates=(BNO055_ADDRESS_A, BNO055_ADDRESS_B)):
-    """I2Cでアドレス応答があるかだけ確認"""
+    """I2Cアドレスをスキャンして応答があったアドレスを返す"""
     for addr in candidates:
         try:
             h = pi.i2c_open(bus, addr)
-            v = pi.i2c_read_byte_data(h, 0x00)
+            v = pi.i2c_read_byte_data(h, 0x00) # Chip ID register
             pi.i2c_close(h)
             if v is not None and v >= 0:
                 return addr
@@ -44,138 +30,102 @@ def detect_address(pi, bus=1, candidates=(BNO055_ADDRESS_A, BNO055_ADDRESS_B)):
             pass
     return None
 
-
 def main():
-    print("=== BNO055 HW CHECK START ===")
+    print("=== BNO055 FULL SENSOR CHECK ===")
 
+    # 1. pigpio 接続
     pi = pigpio.pi()
     if not pi.connected:
-        print("❌ pigpio に接続できません。先に pigpiod を起動してください。")
-        print("   例: sudo pigpiod")
+        print("❌ pigpio に接続できません。sudo pigpiod を実行してください。")
         return
 
+    # 2. アドレス検出
     bus = 1
     addr = detect_address(pi, bus=bus)
     if addr is None:
-        print("❌ I2C 0x28/0x29 にデバイス応答がありません。配線/電源/I2C設定/アドレスを確認してください。")
+        print("❌ I2C デバイスが見つかりません (0x28 or 0x29)。配線を確認してください。")
         return
+    print(f"✅ Device found at 0x{addr:02X}")
 
-    print(f"✅ I2C 応答あり: address=0x{addr:02X} bus={bus}")
-
-    imu = BNO055(address=addr, i2c_bus=bus, pi=pi, stop_on_close=False)
-
-    ok = imu.begin(mode=OPERATION_MODE_NDOF)
-    print("begin():", "✅ OK" if ok else "❌ FAIL")
-    if not ok:
-        print("begin() が失敗しました。センサ不在/誤配線/電源不足/アドレス違いの可能性が高いです。")
+    # 3. 初期化
+    imu = BNO055(address=addr, i2c_bus=bus, pi=pi)
+    if not imu.begin(mode=OPERATION_MODE_NDOF):
+        print("❌ begin() 失敗。")
         imu.close()
         return
-
+    
+    print("✅ begin() OK - センサー稼働開始 (NDOFモード)")
+    
+    # リビジョン情報表示
     rev = imu.get_revision()
-    if rev is None:
-        print("⚠ get_revision(): None（読み取り失敗）")
-    else:
-        sw, bl, accel, mag, gyro = rev
-        print(f"✅ revision: sw=0x{sw:04X} bl=0x{bl:02X} accel=0x{accel:02X} mag=0x{mag:02X} gyro=0x{gyro:02X}")
+    if rev:
+        print(f"   Revision: SW={rev[0]:04X} BL={rev[1]:02X} Acc={rev[2]:02X} Mag={rev[3]:02X} Gyr={rev[4]:02X}")
 
-    # サンプル取得
-    N = 60
-    interval_s = 0.1
+    # 4. ループ計測
+    N = 100
+    interval_s = 0.1 # 100ms
+    
+    print("\n--- Sampling Start ---")
+    print(f"Count: {N}, Interval: {interval_s}s")
+    print("凡例:")
+    print("  Acc : 加速度 (重力含む)")
+    print("  Lin : 線形加速度 (重力抜いた移動成分)")
+    print("  Gyr : ジャイロ (角速度)")
+    print("  Mag : 磁気センサ")
+    print("  Grv : 重力ベクトル")
+    print("-" * 60)
 
-    none_counts = {
-        "temp": 0,
-        "euler": 0,
-        "quat": 0,
-        "accel": 0,
-        "gyro": 0,
-        "mag": 0,
-        "grav": 0,
-    }
+    try:
+        for i in range(N):
+            # データ一括取得
+            sys_stat = imu._read_byte(0x39) # System Status (任意)
+            
+            t = imu.temperature()
+            e = imu.euler()              # [Heading, Roll, Pitch]
+            # q = imu.quaternion()       # [w, x, y, z] 今回は表示スペースの都合で省略(必要なら追加可)
+            
+            acc = imu.accelerometer()       # m/s^2 (重力含む)
+            lin = imu.linear_acceleration() # m/s^2 (重力除く)
+            gyr = imu.gyroscope()           # deg/s (or rad/s depending on config, default deg/s in Adafruit logic)
+            mag = imu.magnetometer()        # uT
+            grv = imu.gravity()             # m/s^2
 
-    quat_norm_bad = 0
-    temp_out_of_range = 0
+            # 表示 (10回に1回表示、または毎回表示など調整)
+            if i % 5 == 0:
+                # タイムスタンプ代わりのインデックス
+                out = f"[{i:03d}] "
+                
+                # 温度
+                out += f"T={t}C " if t is not None else "T=None "
 
-    print("\n--- Sampling ---")
-    print(f"Samples: {N}, interval: {interval_s}s")
-    print("表示フォーマット: [Index] T=温度 Euler=角 Quat=四元数 Acc=加速度 Gyro=角速度 Mag=磁気 Grav=重力") 
-    print("")
+                # Euler
+                if e: out += f"Eul={e[0]:5.1f},{e[1]:5.1f},{e[2]:5.1f} | "
+                else: out += "Eul=None              | "
 
-    for i in range(N):
-        t = imu.temperature()
-        e = imu.euler()
-        q = imu.quaternion()
-        a = imu.accelerometer()
-        g = imu.gyroscope()
-        m = imu.magnetometer()
-        gr = imu.gravity()
+                # Accel & Linear Accel
+                if acc: out += f"Acc={acc[0]:5.2f},{acc[1]:5.2f},{acc[2]:5.2f} "
+                else:   out += "Acc=None             "
+                
+                if lin: out += f"Lin={lin[0]:5.2f},{lin[1]:5.2f},{lin[2]:5.2f} | "
+                else:   out += "Lin=None             | "
 
-        # --- 統計収集 ---
-        if t is None:
-            none_counts["temp"] += 1
-        else:
-            if not (-40 <= t <= 85):
-                temp_out_of_range += 1
+                # Gyro & Mag
+                if gyr: out += f"Gyr={gyr[0]:5.2f},{gyr[1]:5.2f},{gyr[2]:5.2f} "
+                else:   out += "Gyr=None             "
 
-        if e is None: none_counts["euler"] += 1
-        if q is None: none_counts["quat"] += 1
-        if a is None: none_counts["accel"] += 1
-        if g is None: none_counts["gyro"] += 1
-        if m is None: none_counts["mag"] += 1
-        if gr is None: none_counts["grav"] += 1
+                if mag: out += f"Mag={mag[0]:5.1f},{mag[1]:5.1f},{mag[2]:5.1f}"
+                else:   out += "Mag=None"
 
-        nrm = quat_norm(q)
-        if nrm is not None and not (0.6 <= nrm <= 1.4):
-            quat_norm_bad += 1
+                print(out)
 
-        # --- 表示（全データ出力） ---
-        if i % 10 == 0:
-            parts = []
-            parts.append(f"[{i:02d}]")
+            time.sleep(interval_s)
 
-            # 温度
-            parts.append(f"T={t}C" if t is not None else "T=None")
+    except KeyboardInterrupt:
+        print("\n中断されました。")
 
-            # Euler (Heading, Roll, Pitch)
-            if e: parts.append(f"Eul={e[0]:.1f},{e[1]:.1f},{e[2]:.1f}")
-            else: parts.append("Eul=None")
-
-            # Quaternion (w, x, y, z)
-            if q: parts.append(f"Qua={q[0]:.2f},{q[1]:.2f},{q[2]:.2f},{q[3]:.2f}")
-            else: parts.append("Qua=None")
-
-            # Acceleration (x, y, z)
-            if a: parts.append(f"Acc={a[0]:.2f},{a[1]:.2f},{a[2]:.2f}")
-            else: parts.append("Acc=None")
-
-            # Gyroscope (x, y, z)
-            if g: parts.append(f"Gyr={g[0]:.2f},{g[1]:.2f},{g[2]:.2f}")
-            else: parts.append("Gyr=None")
-
-            # Magnetometer (x, y, z)
-            if m: parts.append(f"Mag={m[0]:.1f},{m[1]:.1f},{m[2]:.1f}")
-            else: parts.append("Mag=None")
-
-            # Gravity Vector (x, y, z)
-            if gr: parts.append(f"Grv={gr[0]:.2f},{gr[1]:.2f},{gr[2]:.2f}")
-            else: parts.append("Grv=None")
-
-            print(" ".join(parts))
-
-        time.sleep(interval_s)
-
-    print("\n--- Result summary ---")
-    for k, v in none_counts.items():
-        rate = 100.0 * v / N
-        print(f"{k:5s}: None={v:2d}/{N} ({rate:5.1f}%)")
-
-    if temp_out_of_range:
-        print(f"⚠ temperature out of expected range: {temp_out_of_range}/{N}")
-    if quat_norm_bad:
-        print(f"⚠ quaternion norm suspicious: {quat_norm_bad}/{N} (norm not in [0.6, 1.4])")
-
-    imu.close()
-    print("\n=== BNO055 HW CHECK END ===")
-
+    finally:
+        imu.close()
+        print("\n=== Check Finished ===")
 
 if __name__ == "__main__":
     main()
