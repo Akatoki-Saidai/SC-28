@@ -21,7 +21,7 @@ import math
 import time
 import pigpio
 
-from bno055_fixed import BNO055, BNO055_ADDRESS_A, BNO055_ADDRESS_B, OPERATION_MODE_NDOF
+from bno055 import BNO055, BNO055_ADDRESS_A, BNO055_ADDRESS_B, OPERATION_MODE_NDOF
 
 
 def is_finite_list(xs):

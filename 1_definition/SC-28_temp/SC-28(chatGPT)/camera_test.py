@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 # ★あなたの修正版Cameraが入っているファイル名に合わせて変更
-from camera_fixed import Camera
+from camera import Camera
 
 
 def clamp(x, lo, hi):

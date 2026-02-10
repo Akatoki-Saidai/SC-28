@@ -7,7 +7,7 @@ from collections import deque
 
 # ★ここをあなたの修正版ファイル名に合わせて変更
 # 例: from gps_fixed import GPS, idokeido, zikan, calculate_distance_and_angle
-from gps_fixed import GPS, idokeido, zikan, calculate_distance_and_angle
+from gps import GPS, idokeido, zikan, calculate_distance_and_angle
 
 
 def fmt(x, nd=6):
