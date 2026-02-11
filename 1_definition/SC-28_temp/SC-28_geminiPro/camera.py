@@ -11,7 +11,7 @@ from picamera2 import Picamera2
 from ultralytics import YOLO
 
 class Camera:
-    def __init__(self, model_path="./SC-27_yolo_ver1.pt", debug=False):
+    def __init__(self, model_path="./my_custom_model.pt", debug=False):
         self.debug = debug
         self.model = None
         self.picam2 = None
