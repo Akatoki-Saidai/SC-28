@@ -1,9 +1,0 @@
-path: dataset  # dataset root directory
-train: images/train  # training images (relative to 'path')
-val: images/val  # validation images (relative to 'path')
-test: images/test # optional test images
-
-nc:
-  1  # number of classes
-names:
-  0: colorcone
