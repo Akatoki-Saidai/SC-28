@@ -13,7 +13,7 @@ from ultralytics import YOLO
 class Camera:
     def __init__(
         self,
-        model_path="./SC-27_yolo_ver1.pt",
+        model_path="./my_custom_model.pt",
         debug=False,
         yolo_every=5,                 # YOLOを何フレームに1回動かすか
         yolo_target_class="cone",     # モデルのクラス名に合わせる（無ければID=0へフォールバック）
