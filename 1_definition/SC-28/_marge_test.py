@@ -1,113 +1,167 @@
 import time
-from bme280 import BME280Sensor   # ← センサークラスのファイル名に合わせて変更
-from bno055 import BNO055
-from camera import Camera
 import cv2
 import sys
 
+# 各モジュールの読み込み
+try:
+    from camera import Camera
+    from bno055 import BNO055
+    from bme280 import BME280Sensor
+except ImportError as e:
+    print(f"モジュール読み込みエラー: {e}")
+    sys.exit(1)
+
+# ==========================================
+# 1. セットアップ部
+# ==========================================
+def setup_sensors():
+    """
+    各センサーとカメラを初期化し、基準気圧(QNH)を測定する。
+    Returns:
+        tuple: (bno, cam, bme, qnh)
+    """
+    print("\n=== Sensor Setup Start ===")
+    
+    # --- BNO055 (9軸センサー) ---
+    bno = None
+    try:
+        bno = BNO055()
+        if bno.begin():
+            print("BNO055: OK")
+        else:
+            print("BNO055: Failed (Not found)")
+            bno = None
+    except Exception as e:
+        print(f"BNO055 Init Error: {e}")
+
+    # --- Camera (カメラ & YOLO) ---
+    cam = None
+    try:
+        # debug=Trueにするとウィンドウが表示されます
+        cam = Camera(model_path="./my_custom_model.pt", debug=True)
+        print("Camera: OK")
+    except Exception as e:
+        print(f"Camera Init Error: {e}")
+
+    # --- BME280 (温湿度気圧) & 基準気圧測定 ---
+    bme = None
+    qnh = 1013.25  # デフォルト値
+    try:
+        bme = BME280Sensor(debug=False)
+        if bme.calib_ok:
+            print("BME280: OK - Calculating Baseline Pressure (approx 3 sec)...")
+            # ここで基準気圧(高度0m地点の気圧)を測定
+            qnh = bme.baseline()
+            print(f"-> Baseline (QNH): {qnh:.2f} hPa")
+        else:
+            print("BME280: Failed (Calibration Error)")
+    except Exception as e:
+        print(f"BME280 Init Error: {e}")
+
+    print("=== Setup Complete ===\n")
+    return bno, cam, bme, qnh
+
+
+# ==========================================
+# 2. 値取得ループ部
+# ==========================================
 def main():
-    # ---- 1. bmeセットアップ ----
-    sensor = BME280Sensor(debug=True)
-    print("\n--- Baseline (QNH) calibration ---")
-    qnh = sensor.baseline()
-    print(f"Baseline QNH = {qnh:.2f} hPa")
+    # セットアップ実行 (基準気圧 qnh もここで取得)
+    bno, cam, bme, qnh = setup_sensors()
 
-    # ---- 2. bnoセットアップ ----
-        # アドレス自動検出で初期化
-    imu = BNO055() 
-
-    if not imu.begin():
-        print("センサーが見つからないか、初期化に失敗しました。")
+    # センサー類が全滅していないか確認
+    if not any([bno, cam, bme]):
+        print("有効なセンサーがありません。終了します。")
         return
 
     print("計測開始 (Ctrl+C で終了)")
-    print("-" * 50)
+    print("-" * 80)
+    print("Order | Mode |  Linear Accel (m/s^2) |   Gyroscope (deg/s)   | Rel. Alt (m)")
+    print("-" * 80)
 
-    # ---- 3.カメラセットアップ ----
-    # my_custom_model.pt がない場合でも v1.py 内で自動的に「色検出のみモード」になります
-    cam = Camera(model_path="./my_custom_model.pt", debug=True)
-
-
-    while True:
-    #1.bmeセンサー値
-        t, p, h = sensor.read_all()
-        alt = sensor.altitude(p, qnh=qnh)
-
-        print(
-            f"T={t:6.2f} °C | "
-            f"P={p:7.2f} hPa | "
-            f"H={h:6.2f} % | "
-            f"Alt={alt:7.2f} m"
-        )
-    #2.bnoセンサー値
-                # --- 1. すべてのデータを取得 ---
-            # 戻り値は [x, y, z] のリストか、失敗時は None になります
-        temp = imu.temperature()          # 温度 [℃]
-        euler = imu.euler()               # オイラー角 [Heading, Roll, Pitch]
-        acc = imu.accelerometer()         # 加速度 (重力込み) [m/s^2]
-        lin = imu.linear_acceleration()   # 線形加速度 (重力なし・移動成分) [m/s^2]
-        gyr = imu.gyroscope()             # ジャイロ (角速度) [deg/s]
-        mag = imu.magnetometer()          # 磁気 [uT]
-        grav = imu.gravity()              # 重力ベクトル [m/s^2]
-
-            # --- 2. 画面に表示 (Noneチェック付き) ---
-        output = []
+    try:
+        while True:
+            # ---------------------------
+            # A. BNO055 データの取得
+            # ---------------------------
+            gravity = [0, 0, 0]
+            lin_acc = [0, 0, 0]
+            gyro    = [0, 0, 0]
             
-            # 温度
-        output.append(f"T:{temp}C" if temp is not None else "T:--")
+            is_inverted = False  # デフォルトは正常(Normal)
 
-            # オイラー角 (Headingのみ表示して短縮)
-        if euler: output.append(f"Head:{euler[0]:5.1f}")
-        else:     output.append("Head:--")
+            if bno:
+                # 必要なデータを取得
+                grav_data = bno.gravity()             # 重力 (反転判定用)
+                lin_data  = bno.linear_acceleration() # 線形加速度 (要求データ)
+                gyr_data  = bno.gyroscope()           # ジャイロ (要求データ)
 
-            # 線形加速度 (移動の検知に便利)
-        if lin:   output.append(f"Lin:{lin[0]:5.2f},{lin[1]:5.2f},{lin[2]:5.2f}")
-        else:     output.append("Lin:--")
+                # 重力データが取れたら反転判定
+                if grav_data:
+                    gravity = grav_data
+                    # ★反転判定ロジック (Z軸が -2.0 未満なら逆さとみなす)
+                    if gravity[2] < -2.0:
+                        is_inverted = True
 
-            # ジャイロ (回転の検知)
-        if gyr:   output.append(f"Gyr:{gyr[0]:5.2f},{gyr[1]:5.2f},{gyr[2]:5.2f}")
-        else:     output.append("Gyr:--")
+                if lin_data: lin_acc = lin_data
+                if gyr_data: gyro = gyr_data
 
-            # 磁気 (方位磁針)
-        if mag:   output.append(f"Mag:{mag[0]:5.1f},{mag[1]:5.1f},{mag[2]:5.1f}")
-        else:     output.append("Mag:--")
-
-            # 重力 (傾き検知)
-        if grav:  output.append(f"Grv:{grav[0]:5.2f},{grav[1]:5.2f},{grav[2]:5.2f}")
-        else:     output.append("Grv:--")
-
-            # 1行にまとめて表示
-        print(" | ".join(output))
-        
-
-
-         # --- BNO055から重力ベクトルを取得 ---
-            # gravity = [x, y, z]  (単位: m/s^2)
-        gravity = imu.gravity()
-            
-        is_inverted = False
-        grav_z = 0.0
-
-        if gravity is not None:
-            grav_z = gravity[2] # Z軸
+            # ---------------------------
+            # B. Camera データの取得
+            # ---------------------------
+            order = 0
+            if cam:
+                # BNOの反転情報をカメラに渡して解析
+                frame, _, det_order, _ = cam.capture_and_detect(is_inverted=is_inverted)
+                order = det_order
                 
-                # 【判定】
-                # 一般的なBNO055の設定では、水平置きで Z = +9.8 付近になります。
-                # 逆さになると Z = -9.8 付近になります。
-                # 閾値を -2.0 とし、それより低ければ「反転」とみなします。
-            if grav_z < -2.0:
-                is_inverted = True
-        else:
-            print("BNO Read Error", end="\r")
+                # 画像を表示 (デバッグ用)
+                cv2.imshow("Camera View", frame)
 
-                    # --- カメラ判定実行 ---
-            # is_inverted=True を渡すと、内部でターゲットの左右位置(X)を反転して計算します
-        frame, x_pct, order, area = cam.capture_and_detect(is_inverted=is_inverted)
-        print(order)
-        time(1)
+            # ---------------------------
+            # C. BME280 データの取得 (相対高度)
+            # ---------------------------
+            altitude = 0.0
+            if bme:
+                # 気圧などを取得
+                t, p, h = bme.read_all()
+                if p is not None:
+                    # セットアップ時に計測した qnh を基準に高度を計算
+                    altitude = bme.altitude(p, qnh=qnh)
+
+            # ---------------------------
+            # D. 結果の表示
+            # ---------------------------
+            inv_str = "INV" if is_inverted else "NRM"
+            
+            log_str = (
+                f" Ord:{order} |"
+                f" {inv_str} |"
+                f" L:{lin_acc[0]:5.2f},{lin_acc[1]:5.2f},{lin_acc[2]:5.2f} |"
+                f" G:{gyro[0]:6.2f},{gyro[1]:6.2f},{gyro[2]:6.2f} |"
+                f" Alt:{altitude:6.2f}m"
+            )
+            print(log_str)
+
+            # キー入力待機 (OpenCVウィンドウ用)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            
+            # ループ速度調整
+            # time.sleep(0.01)
+
+    except KeyboardInterrupt:
+        print("\n中断されました。")
+    
+    finally:
+        # 終了処理
+        print("\nClosing devices...")
+        if cam: cam.close()
+        if bno: bno.close()
+        if bme: bme.close()
+        cv2.destroyAllWindows()
+        print("Done.")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n=== DEBUG END ===")
+    main()
