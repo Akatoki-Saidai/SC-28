@@ -23,7 +23,7 @@ def main():
 
     # 目標地点（テスト用）
     # ※適当な値だと距離が大きくなります。必要なら自分のゴール座標に変更。
-    goal_lat, goal_lon = 35.0, 139.0
+    goal_lat, goal_lon = 35.86128055, 139.60708333 # サークル会館前
 
     # start点（進行方向計算用）
     start_lat, start_lon = None, None
