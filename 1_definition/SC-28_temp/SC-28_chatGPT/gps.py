@@ -17,7 +17,7 @@ ERROR_DISTANCE = 2727272727
 
 
 class GPS:
-    def __init__(self, port="/dev/serial0", baudrate=9600, timeout=0.5):
+    def __init__(self, port="/dev/serial0", baudrate=38400, timeout=0.5):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
