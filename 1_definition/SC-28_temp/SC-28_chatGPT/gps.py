@@ -117,6 +117,9 @@ class GPS:
                         # (2) 有効判定
                         if not self._is_valid_gga(msg):
                             continue
+                    elif line.startswith("$GP") or line.startswith("$GN"):
+                        msg = pynmea2.parse(line)
+                        #（2）有効判定
                     else:
                         continue
 
@@ -149,7 +152,7 @@ class GPS:
                 if not line:
                     continue
 
-                if line.startswith("$GPRMC"):
+                if line.startswith("$GPRMC") or line.startswith("$GNRMC"):
                     try:
                         msg = pynmea2.parse(line)
 
