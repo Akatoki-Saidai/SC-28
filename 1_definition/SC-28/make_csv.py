@@ -26,8 +26,18 @@ try:
     
     DEFAULT_DICT = {x : '' for x in msg_types}
 
+    # --- 修正箇所：保存先ディレクトリの設定とパスの結合 ---
+    log_dir = '/home/yuta/club/akatoki/SC-28/5_log'
+    #log_dir = '/home/sc28/SC-28/5_log'
+    
+    # ディレクトリが存在しない場合は作成（エラー回避）
+    os.makedirs(log_dir, exist_ok=True)
+
     current_time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f'log_{current_time_str}.csv'
+    
+    # ディレクトリパスとファイル名を結合
+    filename = os.path.join(log_dir, f'log_{current_time_str}.csv')
+    # ----------------------------------------------------
 
     # ファイル作成とヘッダー書き込み
     if not os.path.exists(filename) or os.path.getsize(filename) == 0:
