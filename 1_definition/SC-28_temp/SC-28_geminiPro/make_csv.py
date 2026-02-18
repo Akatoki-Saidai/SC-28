@@ -27,8 +27,7 @@ try:
     DEFAULT_DICT = {x : '' for x in msg_types}
 
     # --- 修正箇所：保存先ディレクトリの設定とパスの結合 ---
-    log_dir = '/home/yuta/club/akatoki/SC-28/5_log'
-    #log_dir = '/home/sc28/SC-28/5_log'
+    log_dir = '/home/sc28/SC-28/5_log'
     
     # ディレクトリが存在しない場合は作成（エラー回避）
     os.makedirs(log_dir, exist_ok=True)
