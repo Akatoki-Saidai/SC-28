@@ -2,6 +2,7 @@ import time
 import cv2
 import sys
 import math
+import numpy as np
 
 # ==========================================
 # モジュール読み込み
@@ -20,46 +21,48 @@ except ImportError as e:
 # ==========================================
 # ヘルパー関数
 # ==========================================
+def create_dummy_image(text="No Camera Signal"):
+    """キー入力確保のためのダミー画像生成"""
+    img = np.zeros((240, 320, 3), dtype=np.uint8)
+    cv2.putText(img, text, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    return img
+
 def show_startup_manual():
     """起動時の操作マニュアルを表示"""
     print("\n" + "="*60)
-    print("      SC-28 統合テストプログラム (Final Release + Fix)")
+    print("      SC-28 統合テストプログラム (Rev.2 KeyInput Fix)")
     print("="*60)
     print("このプログラムは、搭載されたセンサーとモーターの動作確認を行います。")
     print("エラーが発生した場合、詳細が表示されます。\n")
     print("【基本操作】")
-    print("  [ESC] キー : 強制終了 (安全停止)")
+    print("  [ESC] キー : 強制終了")
     print("  [m]   キー : 表示モード切替 (順送り)")
     print("      Mode 0: 概要 (Summary)")
-    print("      Mode 1: IMU詳細 (9軸センサー)")
+    print("      Mode 1: BNO詳細 (9軸センサー)")
     print("      Mode 2: BME詳細 (気圧・高度)")
     print("      Mode 3: GPS詳細 (位置情報)")
     print("      Mode 4: Camera (画像認識)")
     print("      Mode 5: Motor (モーター操作)")
-    print("  [s]   キー : ログの一時停止 (※Mode 5以外)")
+    print("  [s]   キー : ログ一時停止 (※Mode 5以外)")
     print("  [q]   キー : 終了 (※Mode 5以外)")
     print("-" * 60)
-    print("準備ができたら Enter キーを押して開始してください...")
-    input(">> [Press Enter] ")
-    print("初期化中... そのままお待ちください...\n")
+    print("※ 画面上に 'Control Panel' ウィンドウが表示されます。")
+    print("   キー操作はそのウィンドウをアクティブにして行ってください。")
+    print("-" * 60)
+    input(">> 準備ができたら Enter キーを押してください... ")
 
 def show_motor_manual():
     """モーターモードに入った時の操作説明"""
     print("\n" + "!"*60)
-    print("      【注意】 モーター操作モード (Mode 5) に入ります")
+    print("      【注意】 モーター操作モード (Mode 5)")
     print("!"*60)
-    print("キーボードでモーターを直接制御します。車輪の回転に注意してください。\n")
-    print("  [w] : 前進      (Forward)")
-    print("  [s] : 後退      (Backward)")
-    print("  [a] : 左旋回    (Turn Left)")
-    print("  [d] : 右旋回    (Turn Right)")
-    print("  [q] / [e] : その場旋回・片輪駆動")
-    print("  [z] or [Space] : 停止 (STOP)")
-    print("  [ESC] : 強制終了")
-    print("-" * 60)
-    print("3秒後に操作可能になります...")
+    print("  [w]/[s] : 前進/後退")
+    print("  [a]/[d] : 旋回")
+    print("  [z]/[Sp]: 停止")
+    print("  [ESC]   : 強制終了")
     print("!"*60 + "\n")
-    time.sleep(3) # 読む時間を確保
+    # 読み取り時間を少し短縮 (レスポンス重視)
+    time.sleep(2)
 
 def val(value, fmt=".2f", default=" -- "):
     if value is None: return default
@@ -130,29 +133,35 @@ def setup_sensors():
 # メイン処理
 # ==========================================
 def main():
-    # 1. 起動マニュアル表示
     show_startup_manual()
+
+    # --- 修正①: キー入力確保用のウィンドウを強制作成 ---
+    window_name = "Control Panel"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 320, 240)
+    
+    # ダミー画像の初期表示
+    dummy_frame = create_dummy_image("Initializing...")
+    cv2.imshow(window_name, dummy_frame)
+    cv2.waitKey(1)
 
     # --- 設定 ---
     GOAL_LAT = 35.000000
     GOAL_LON = 139.000000
 
-    # センサー初期化
     bno, cam, bme, qnh, motor_ok = setup_sensors()
 
-    # デバイス状況の表示
     print("\n=== デバイス接続状況 ===")
-    print(f"* BNO055 (9軸) : {'OK' if bno else 'Not Found (Skip)'}")
-    print(f"* Camera (映像): {'OK' if cam else 'Not Found (Skip)'}")
-    print(f"* BME280 (気圧): {'OK' if bme else 'Not Found (Skip)'}")
-    print(f"* Motors (駆動): {'OK' if motor_ok else 'Not Found (Skip)'}")
+    print(f"* BNO055 : {'OK' if bno else 'Skip'}")
+    print(f"* Camera : {'OK' if cam else 'Skip'}")
+    print(f"* BME280 : {'OK' if bme else 'Skip'}")
+    print(f"* Motors : {'OK' if motor_ok else 'Skip'}")
     print("========================\n")
     
     if not any([bno, cam, bme, motor_ok]):
-        print("有効なデバイスが見つかりませんが、ダミーモードで開始します。")
+        print("有効なデバイスがありません。ダミーモードで開始します。")
         time.sleep(2)
 
-    # 変数初期化
     prev_lat, prev_lon = None, None
     display_mode = 0
     last_mode = -1
@@ -185,17 +194,14 @@ def main():
                     if gravity is not None and gravity[2] < -2.0:
                         is_inverted = True
                 except Exception as e:
-                    if display_mode == 1: print(f"BNO Read Error: {e}")
+                    if display_mode == 1: print(f"BNO Error: {e}")
 
             # Camera
             if cam:
                 try:
                     frame, x_pct, order, area = cam.capture_and_detect(is_inverted=is_inverted)
-                    if frame is not None:
-                        try: cv2.imshow("Camera View", frame)
-                        except Exception: pass 
                 except Exception as e:
-                    if display_mode == 4: print(f"Cam Read Error: {e}")
+                    if display_mode == 4: print(f"Cam Error: {e}")
 
             # BME
             if bme:
@@ -203,56 +209,57 @@ def main():
                     bme_temp, pressure, humidity = bme.read_all()
                     if pressure is not None: altitude = bme.altitude(pressure, qnh=qnh)
                 except Exception as e:
-                    if display_mode == 2: print(f"BME Read Error: {e}")
+                    if display_mode == 2: print(f"BME Error: {e}")
 
             # GPS
-            try:
-                curr_lat, curr_lon = idokeido()
-                if curr_lat is not None and curr_lon is not None:
-                    if prev_lat is None: 
+            # 修正③: モーター操作中(Mode 5)はGPS取得をスキップしてレスポンス優先
+            if display_mode != 5:
+                try:
+                    curr_lat, curr_lon = idokeido()
+                    if curr_lat is not None and curr_lon is not None:
+                        if prev_lat is None: 
+                            prev_lat, prev_lon = curr_lat, curr_lon
+                        d, ang_rad = calculate_distance_and_angle(curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON)
+                        if d != 2727272727:
+                            dist_to_goal, angle_to_goal = d, math.degrees(ang_rad)
                         prev_lat, prev_lon = curr_lat, curr_lon
-                    d, ang_rad = calculate_distance_and_angle(curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON)
-                    if d != 2727272727:
-                        dist_to_goal, angle_to_goal = d, math.degrees(ang_rad)
-                    prev_lat, prev_lon = curr_lat, curr_lon
-            except Exception as e:
-                if time.time() - last_gps_error_time > 3.0:
-                    print(f"GPS Error: {e}")
-                    last_gps_error_time = time.time()
+                except Exception as e:
+                    if time.time() - last_gps_error_time > 3.0:
+                        print(f"GPS Error: {e}")
+                        last_gps_error_time = time.time()
+
+            # ---------------------------
+            # 画面表示 (修正①対応)
+            # ---------------------------
+            # カメラがある場合はその映像を、なければダミー画像を表示
+            # これにより cv2.waitKey が常に機能する
+            if frame is not None:
+                cv2.imshow(window_name, frame)
+            else:
+                status_text = f"Mode: {display_mode} (No Camera)"
+                cv2.imshow(window_name, create_dummy_image(status_text))
 
             # ---------------------------
             # 初回データ取得判定
             # ---------------------------
             if not first_data_fetched:
-                data_exists = any([
-                    lin_acc is not None, 
-                    pressure is not None, 
-                    curr_lat is not None, 
-                    frame is not None
-                ])
+                data_exists = any([lin_acc is not None, pressure is not None, curr_lat is not None, frame is not None])
                 if data_exists:
                     print("\n" + "="*60)
-                    print(" >> 初回データ取得に成功しました！")
-                    print(" >> ログ表示を開始します。")
-                    print(" >> モーター操作は 'm' キーを押して [Mode 5] にしてください。")
+                    print(" >> 初回データ取得成功！ モーター操作は 'm' キーで [Mode 5] へ")
                     print("="*60 + "\n")
-                    time.sleep(2)
+                    time.sleep(1)
                     first_data_fetched = True
 
             # ---------------------------
-            # キー入力処理
+            # キー入力処理 (ウィンドウがあるため機能する)
             # ---------------------------
             key = cv2.waitKey(1) & 0xFF
             
-            # ESCキー(27)なら常に終了
-            if key == 27:
+            if key == 27: # ESC
                 break
-            
-            # [修正箇所] 'q'キー: モーターモード以外なら終了
             elif display_mode != 5 and key == ord('q'):
                 break
-            
-            # [修正箇所] 's'キー: モーターモード以外なら一時停止
             elif display_mode != 5 and key == ord('s'):
                 print("\n=== 一時停止中 (5秒) ==="); time.sleep(5); print("=== 再開 ===\n")
             
@@ -274,7 +281,7 @@ def main():
             if display_mode == 5 and motor_ok:
                 cmd = None
                 if key == ord('w'):   cmd = 'w'
-                elif key == ord('s'): cmd = 's' # ここで後退として処理される
+                elif key == ord('s'): cmd = 's'
                 elif key == ord('a'): cmd = 'a'
                 elif key == ord('d'): cmd = 'd'
                 elif key == ord('q'): cmd = 'q'
