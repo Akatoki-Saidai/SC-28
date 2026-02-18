@@ -25,15 +25,15 @@ import ijochi
 # ---------------------------------------------------------
 # 定数・ピン設定
 # ---------------------------------------------------------
-delta_power = 0.1  # スムーズな加速・減速のための刻み幅
+delta_power = 0.1 # スムーズな加速・減速のための刻み幅
 
 # DCモータのピン設定 (gpiozero用: BCM番号)
 # ※ 実機の配線に合わせて数値を変更してください
-PIN_RIGHT_FORWARD = 18
-PIN_RIGHT_BACKWARD = 23
+PIN_RIGHT_FORWARD = 18 
+PIN_RIGHT_BACKWARD = 23 
 
-PIN_LEFT_FORWARD = 13
-PIN_LEFT_BACKWARD = 24
+PIN_LEFT_FORWARD = 13 
+PIN_LEFT_BACKWARD = 24 
 
 # その他のGPIOピン (RPi.GPIO用: BCM番号)
 PIN_LED = 5
@@ -57,9 +57,8 @@ def setup_gpio():
         GPIO.setup(PIN_VM, GPIO.OUT)
         GPIO.output(PIN_LED, 0)
         # 初期状態は安全のためDisable(0)にしておく
-        GPIO.output(PIN_VM, 0)
+        GPIO.output(PIN_VM, 0) 
         _gpio_initialized = True
-
 
 def setup_motors():
     """モータードライバの初期化 (gpiozero)"""
@@ -71,129 +70,186 @@ def setup_motors():
         # pigpio接続を使い回す (毎回接続すると不安定になるため)
         if _factory is None:
             _factory = PiGPIOFactory()
-
+            
         motor_left = Motor(forward=PIN_LEFT_FORWARD, backward=PIN_LEFT_BACKWARD, pin_factory=_factory)
         motor_right = Motor(forward=PIN_RIGHT_FORWARD, backward=PIN_RIGHT_BACKWARD, pin_factory=_factory)
-        setup_gpio()  # LEDなども一緒に準備
+        setup_gpio() # LEDなども一緒に準備
     except Exception as e:
         print(f"Motor Setup Error: {e}")
         make_csv.print('serious_error', f"Motor Setup Error: {e}")
         motor_right = None
         motor_left = None
 
-
 def cleanup():
-    """終了時の安全停止処理（修正：VMを確実にOFFしてからcleanup）"""
-    global motor_left, motor_right
+    """終了時の安全停止処理"""
     print("Cleaning up motors and GPIO...")
-
-    # GPIOが未初期化でも安全にVMを落とせるようにする
-    try:
-        setup_gpio()
-        GPIO.output(PIN_LED, 0)
-        GPIO.output(PIN_VM, 0)   # ★重要：モータ電源ENを確実に落とす
-    except Exception:
-        pass
-
-    # 停止＆リソース開放
     stop()
     if motor_left:
-        try:
-            motor_left.close()
-        except Exception:
-            pass
+        motor_left.close()
     if motor_right:
-        try:
-            motor_right.close()
-        except Exception:
-            pass
-
-    motor_left = None
-    motor_right = None
-
+        motor_right.close()
     try:
         GPIO.cleanup()
-    except Exception:
+    except:
         pass
-
 
 # ---------------------------------------------------------
 # 動作関数
 # ---------------------------------------------------------
-def stop(current_power=1.0):
-    """停止：現在の出力から段階的に減速して停止"""
-    setup_motors()
-    if motor_left is None or motor_right is None:
+def stop():
+    """徐々に減速して停止"""
+    global motor_right, motor_left
+    if not (motor_right and motor_left):
         return
 
-    power = max(0.0, float(current_power))
-    while power > 0:
-        motor_left.forward(power)
-        motor_right.forward(power)
-        power = max(0.0, power - delta_power)
+    # valueがNoneになる可能性を考慮して安全に取得
+    current_power_r = motor_right.value or 0.0
+    current_power_l = motor_left.value or 0.0
+
+    # 既に停止していれば何もしない
+    if current_power_r == 0 and current_power_l == 0:
+        return
+
+    # ステップ数が0にならないよう max(1, ...) で保護
+    steps = max(1, int(max(abs(current_power_r), abs(current_power_l)) / delta_power))
+    
+    for i in range(steps + 1):
+        target_r = current_power_r * (1 - i / steps)
+        target_l = current_power_l * (1 - i / steps)
+        motor_right.value = target_r
+        motor_left.value = target_l
         time.sleep(0.05)
 
-    motor_left.stop()
-    motor_right.stop()
+    motor_right.value = 0.0
+    motor_left.value = 0.0
+    time.sleep(0.1)
 
-
-def move(direction, power=1.0, duration=1.0, is_inverted=False, enable_stack_check=True):
-    """移動関数（あなたの元コードそのまま）"""
+def move(direction, power, duration, is_inverted=False, enable_stack_check=True):
+    """
+    指定方向に移動する
+    
+    Args:
+        direction: 'w', 's', 'a', 'd', 'q', 'e'
+        power: 0.0 ~ 1.0
+        duration: 秒数
+        is_inverted: Trueなら操作を反転 (逆さま走行用)
+        enable_stack_check: Trueならスタック検知を行う (解除動作中はFalseにする)
+    """
+    global motor_right, motor_left, bno
+    
+    # バリデーション
+    if not (0.0 <= power <= 1.0):
+        print("Error: power must be 0.0 - 1.0")
+        return 0
+    
     setup_motors()
-    if motor_left is None or motor_right is None:
+    if not (motor_right and motor_left):
+        print("Motors not initialized")
         return 0
 
-    setup_gpio()
-    # Motor Driver Enable
-    GPIO.output(PIN_VM, 1)
+    # 移動開始時にVMを有効化
+    if _gpio_initialized:
+        GPIO.output(PIN_VM, 1)
 
-    # ここ以降はあなたの元コードを保持（省略せず残す）
-    # ---- 省略しない版にしたい場合は、この下をあなたの元ファイルの move() 本体で置き換えてOK ----
+    # 1. 逆さ判定による方向反転
+    if is_inverted:
+        mapping = {'w': 's', 's': 'w', 'a': 'd', 'd': 'a', 'q': 'e', 'e': 'q'}
+        direction = mapping.get(direction, direction)
 
-    # 例: directionによる操作（あなたの実装に合わせている前提）
-    try:
-        # 加速
-        p = 0.0
-        target = max(0.0, min(1.0, float(power)))
-        while p < target:
-            p = min(target, p + delta_power)
-            if direction == 'w':
-                motor_left.forward(p)
-                motor_right.forward(p)
-            elif direction == 's':
-                motor_left.backward(p)
-                motor_right.backward(p)
-            elif direction == 'a':
-                motor_left.backward(p)
-                motor_right.forward(p)
-            elif direction == 'd':
-                motor_left.forward(p)
-                motor_right.backward(p)
-            elif direction == 'q':
-                motor_left.stop()
-                motor_right.forward(p)
-            elif direction == 'e':
-                motor_left.forward(p)
-                motor_right.stop()
-            time.sleep(0.05)
+    # 2. モーター値の設定関数 (内部ヘルパー)
+    def set_values(d, p):
+        if d == 'w':   mr, ml = p, p
+        elif d == 's': mr, ml = -p, -p
+        elif d == 'a': mr, ml = p, -p  # 左旋回
+        elif d == 'd': mr, ml = -p, p  # 右旋回
+        elif d == 'q': mr, ml = 0, p   # その場左
+        elif d == 'e': mr, ml = p, 0   # その場右
+        else: return False
+        
+        motor_right.value = mr
+        motor_left.value = ml
+        return True
 
-        # 維持
-        time.sleep(max(0.0, float(duration)))
+    # 3. 加速フェーズ
+    # power=0やdelta_power関係のゼロ除算防止
+    steps = max(1, int(power / delta_power))
+    accel_time = 0
+    
+    for i in range(steps + 1):
+        curr_p = min(i * delta_power, power)
+        if not set_values(direction, curr_p):
+            print("Invalid direction")
+            stop()
+            return 0
+        time.sleep(0.025)
+        accel_time += 0.025
 
-    finally:
-        stop(target)
+    remaining_time = max(0, duration - accel_time)
+    is_stacked = 0
 
-    return 0
+    # 4. 定速移動 & 監視フェーズ
+    if remaining_time > 0:
+        set_values(direction, power) # 目標速度維持
 
+        # スタック検知条件: 2秒以上の移動 かつ センサーあり かつ 検知有効
+        if duration >= 2 and bno is not None and enable_stack_check:
+            start_t = time.time()
+            
+            while time.time() - start_t < remaining_time:
+                # --- スタック検知 (ご要望により既存ロジックを維持) ---
+                stack_detected = True
+                
+                # センサーチェック (5回サンプリング)
+                for _ in range(5):
+                    gyro = bno.gyroscope()
+                    # センサーエラー時は検知しない
+                    if gyro is None:
+                        stack_detected = False
+                        break
+                    
+                    # 異常値フィルタ
+                    gyro = ijochi.abnormal_check("bno", "gyro", gyro, ERROR_FLAG=False)
+                    if gyro is None:
+                        stack_detected = False
+                        break
+
+                    # 判定ロジック (厳しい判定のまま維持)
+                    if direction in ['a', 'd', 'q', 'e']:
+                        # 旋回中: Z軸ジャイロが動いているべき
+                        if abs(gyro[2]) > 0.4: # 閾値
+                            stack_detected = False
+                            break
+                    else:
+                        # 直進中: 機体全体が揺れたり動いているべき
+                        if np.linalg.norm(gyro) > 0.4:
+                            stack_detected = False
+                            break
+                    
+                    time.sleep(0.05) # サンプリング間隔
+
+                # スタック確定時の処理
+                if stack_detected:
+                    print("Stack Detected!")
+                    make_csv.print('warning', 'stacking detected')
+                    is_stacked = 1
+                    break 
+
+                # 待機 (残り時間 or 0.1秒)
+                elapsed = time.time() - start_t
+                sleep_t = max(0, min(0.1, remaining_time - elapsed))
+                time.sleep(sleep_t)
+        else:
+            # 監視なしの単純待機
+            time.sleep(remaining_time)
+
+    stop()
+    return is_stacked
 
 def check_stuck(is_stacked, is_inverted=False):
     """
     スタック時の解除動作
     注意: この関数内での move() は enable_stack_check=False にする (無限再帰防止)
     """
-    # ★修正：GPIO未初期化でもLED点滅で落ちないようにする
-    setup_gpio()
-
     if is_stacked == 1:
         try:
             print("Starting Stack Release Sequence...")
@@ -208,38 +264,36 @@ def check_stuck(is_stacked, is_inverted=False):
             # 1. 後退 (3秒)
             move('s', 1.0, 3.0, is_inverted=is_inverted, enable_stack_check=False)
             time.sleep(0.5)
-
+            
             # 2. 右旋回 (1秒)
             move('d', 1.0, 1.0, is_inverted=is_inverted, enable_stack_check=False)
             time.sleep(0.5)
-
+            
             # 3. 前進 (2秒) - トライ
             move('w', 1.0, 2.0, is_inverted=is_inverted, enable_stack_check=False)
             time.sleep(0.5)
-
+            
             stop()
             print("Stack Release Sequence Finished.")
-
+            
         except Exception as e:
             print(f"Error in check_stuck: {e}")
             make_csv.print("error", f"check_stuck error: {e}")
-
 
 if __name__ == "__main__":
     # 単体テスト用
     try:
         print("--- Motor Test Start ---")
         setup_motors()
-
+        
         while True:
             cmd = input("Command (w/s/a/d/q/e) [add 'r' for inverted]: ").strip()
-            if not cmd:
-                break
-
+            if not cmd: break
+            
             is_inv = 'r' in cmd
             d = cmd.replace('r', '')
-
-            if d in ['w', 's', 'a', 'd', 'q', 'e']:
+            
+            if d in ['w','s','a','d','q','e']:
                 print(f"Move {d}, Inverted={is_inv}")
                 # テストなのでスタック検知はONにして動作確認
                 stuck = move(d, 1.0, 3.0, is_inverted=is_inv, enable_stack_check=True)
@@ -248,7 +302,7 @@ if __name__ == "__main__":
                     check_stuck(stuck, is_inverted=is_inv)
             else:
                 print("Invalid command")
-
+                
     except KeyboardInterrupt:
         print("\nTest Aborted")
     finally:

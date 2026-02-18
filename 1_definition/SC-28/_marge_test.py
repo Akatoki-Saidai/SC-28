@@ -4,7 +4,7 @@ import sys
 import math
 
 # ==========================================
-# モジュール読み込み (エラーでも止まらない)
+# モジュール読み込み
 # ==========================================
 try:
     from camera import Camera
@@ -18,25 +18,26 @@ except ImportError as e:
     time.sleep(2)
 
 # ==========================================
-# ヘルパー関数: マニュアル表示系
+# ヘルパー関数
 # ==========================================
 def show_startup_manual():
     """起動時の操作マニュアルを表示"""
     print("\n" + "="*60)
-    print("      SC-28 統合テストプログラム (Debug Mode)")
+    print("      SC-28 統合テストプログラム (Final Release + Fix)")
     print("="*60)
     print("このプログラムは、搭載されたセンサーとモーターの動作確認を行います。")
-    print("センサーが接続されていない場合でも、自動的にスキップして動作します。\n")
+    print("エラーが発生した場合、詳細が表示されます。\n")
     print("【基本操作】")
-    print("  [m] キー : 表示モード切替 (順送り)")
+    print("  [ESC] キー : 強制終了 (安全停止)")
+    print("  [m]   キー : 表示モード切替 (順送り)")
     print("      Mode 0: 概要 (Summary)")
-    print("      Mode 1: BNO詳細 (9軸センサー)")
+    print("      Mode 1: IMU詳細 (9軸センサー)")
     print("      Mode 2: BME詳細 (気圧・高度)")
     print("      Mode 3: GPS詳細 (位置情報)")
     print("      Mode 4: Camera (画像認識)")
     print("      Mode 5: Motor (モーター操作)")
-    print("  [s] キー : ログの一時停止 (数値をゆっくり見たい時)")
-    print("  [q] キー : 終了 (モーターは自動停止します)")
+    print("  [s]   キー : ログの一時停止 (※Mode 5以外)")
+    print("  [q]   キー : 終了 (※Mode 5以外)")
     print("-" * 60)
     print("準備ができたら Enter キーを押して開始してください...")
     input(">> [Press Enter] ")
@@ -54,7 +55,7 @@ def show_motor_manual():
     print("  [d] : 右旋回    (Turn Right)")
     print("  [q] / [e] : その場旋回・片輪駆動")
     print("  [z] or [Space] : 停止 (STOP)")
-    print("キーを離すと少しして止まる、または連打すると動き続ける。")
+    print("  [ESC] : 強制終了")
     print("-" * 60)
     print("3秒後に操作可能になります...")
     print("!"*60 + "\n")
@@ -63,7 +64,7 @@ def show_motor_manual():
 def val(value, fmt=".2f", default=" -- "):
     if value is None: return default
     try: return f"{value:{fmt}}"
-    except: return default
+    except Exception: return default
 
 def print_header(mode):
     print("-" * 130)
@@ -89,30 +90,39 @@ def setup_sensors():
     bno = None
     try:
         bno = BNO055()
-        if not bno.begin(): bno = None
-    except: pass
+        if not bno.begin():
+            print("BNO055: Init Failed")
+            bno = None
+    except Exception as e:
+        print(f"BNO055 Setup Error: {e}")
 
     # --- Camera ---
     cam = None
     try:
         cam = Camera(model_path="./my_custom_model.pt", debug=True)
-    except: pass
+    except Exception as e:
+        print(f"Camera Setup Error: {e}")
 
     # --- BME280 ---
     bme = None
     qnh = 1013.25
     try:
         bme = BME280Sensor(debug=False)
-        if bme.calib_ok: qnh = bme.baseline()
-        else: bme = None
-    except: pass
+        if bme.calib_ok:
+            qnh = bme.baseline()
+        else:
+            print("BME280: Calibration Failed")
+            bme = None
+    except Exception as e:
+        print(f"BME280 Setup Error: {e}")
 
     # --- Motor ---
     motor_ok = False
     try:
         md.setup_motors()
         motor_ok = True
-    except: pass
+    except Exception as e:
+        print(f"Motor Setup Error: {e}")
 
     return bno, cam, bme, qnh, motor_ok
 
@@ -148,22 +158,19 @@ def main():
     last_mode = -1
     last_motor_cmd = "STOP"
     
-    # 初回データ取得フラグ
     first_data_fetched = False
+    last_gps_error_time = 0
 
     try:
         while True:
             # ---------------------------
-            # データ取得 (安全に)
+            # データ取得
             # ---------------------------
             lin_acc, gyro, gravity, euler, temp = None, None, None, None, None
             is_inverted = False
             order, x_pct, area = 0, 0.0, 0.0
             frame = None
-            
-            # BME用変数
             altitude, pressure, bme_temp, humidity = None, None, None, None
-            
             curr_lat, curr_lon = None, None
             dist_to_goal, angle_to_goal = None, None
 
@@ -174,92 +181,119 @@ def main():
                     gyro    = bno.gyroscope()
                     gravity = bno.gravity()
                     euler   = bno.euler()
-                    temp    = bno.temperature() # BNOの温度
-                    if gravity and gravity[2] < -2.0: is_inverted = True
-                except: pass
+                    temp    = bno.temperature()
+                    if gravity is not None and gravity[2] < -2.0:
+                        is_inverted = True
+                except Exception as e:
+                    if display_mode == 1: print(f"BNO Read Error: {e}")
 
             # Camera
             if cam:
                 try:
                     frame, x_pct, order, area = cam.capture_and_detect(is_inverted=is_inverted)
-                    if frame is not None: cv2.imshow("Camera View", frame)
-                except: pass
+                    if frame is not None:
+                        try: cv2.imshow("Camera View", frame)
+                        except Exception: pass 
+                except Exception as e:
+                    if display_mode == 4: print(f"Cam Read Error: {e}")
 
             # BME
             if bme:
                 try:
-                    # 温度、気圧、湿度を全て取得
                     bme_temp, pressure, humidity = bme.read_all()
                     if pressure is not None: altitude = bme.altitude(pressure, qnh=qnh)
-                except: pass
+                except Exception as e:
+                    if display_mode == 2: print(f"BME Read Error: {e}")
 
             # GPS
             try:
                 curr_lat, curr_lon = idokeido()
-                if curr_lat and curr_lon:
-                    if not prev_lat: prev_lat, prev_lon = curr_lat, curr_lon
+                if curr_lat is not None and curr_lon is not None:
+                    if prev_lat is None: 
+                        prev_lat, prev_lon = curr_lat, curr_lon
                     d, ang_rad = calculate_distance_and_angle(curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON)
                     if d != 2727272727:
                         dist_to_goal, angle_to_goal = d, math.degrees(ang_rad)
                     prev_lat, prev_lon = curr_lat, curr_lon
-            except: pass
+            except Exception as e:
+                if time.time() - last_gps_error_time > 3.0:
+                    print(f"GPS Error: {e}")
+                    last_gps_error_time = time.time()
 
             # ---------------------------
-            # ★初回データ取得時のアナウンス
+            # 初回データ取得判定
             # ---------------------------
             if not first_data_fetched:
-                print("\n" + "="*60)
-                print(" >> 初回データ取得に成功しました！")
-                print(" >> ログ表示を開始します。")
-                print(" >> モーター操作は 'm' キーを押して [Mode 5] にしてください。")
-                print("="*60 + "\n")
-                time.sleep(2)
-                first_data_fetched = True
+                data_exists = any([
+                    lin_acc is not None, 
+                    pressure is not None, 
+                    curr_lat is not None, 
+                    frame is not None
+                ])
+                if data_exists:
+                    print("\n" + "="*60)
+                    print(" >> 初回データ取得に成功しました！")
+                    print(" >> ログ表示を開始します。")
+                    print(" >> モーター操作は 'm' キーを押して [Mode 5] にしてください。")
+                    print("="*60 + "\n")
+                    time.sleep(2)
+                    first_data_fetched = True
 
             # ---------------------------
             # キー入力処理
             # ---------------------------
             key = cv2.waitKey(1) & 0xFF
             
-            if key == ord('q'):
+            # ESCキー(27)なら常に終了
+            if key == 27:
                 break
-            elif key == ord('s'):
+            
+            # [修正箇所] 'q'キー: モーターモード以外なら終了
+            elif display_mode != 5 and key == ord('q'):
+                break
+            
+            # [修正箇所] 's'キー: モーターモード以外なら一時停止
+            elif display_mode != 5 and key == ord('s'):
                 print("\n=== 一時停止中 (5秒) ==="); time.sleep(5); print("=== 再開 ===\n")
             
-            # モード切替 (0~5)
+            # モード切替
             new_mode = display_mode
             if key == ord('m'): new_mode = (display_mode + 1) % 6
             elif key in [ord('0'), ord('1'), ord('2'), ord('3'), ord('4'), ord('5')]:
                 new_mode = int(chr(key))
 
-            # モードが変わった時の処理
             if new_mode != display_mode:
                 display_mode = new_mode
-                # ★モーターモードに入った時だけマニュアルを表示
                 if display_mode == 5:
                     show_motor_manual()
-                    last_mode = -1 # ヘッダー強制再描画
+                    last_mode = -1
 
             # ---------------------------
-            # モーター操作 (Mode 5限定)
+            # モーター操作
             # ---------------------------
             if display_mode == 5 and motor_ok:
                 cmd = None
                 if key == ord('w'):   cmd = 'w'
-                elif key == ord('s'): cmd = 's'
+                elif key == ord('s'): cmd = 's' # ここで後退として処理される
                 elif key == ord('a'): cmd = 'a'
                 elif key == ord('d'): cmd = 'd'
                 elif key == ord('q'): cmd = 'q'
                 elif key == ord('e'): cmd = 'e'
-                elif key == ord('z') or key == 32: # Space/z
+                elif key == ord('z') or key == 32:
                     cmd = 'STOP'
-                    md.stop()
+                    try: md.stop()
+                    except Exception as e: print(f"Motor Stop Error: {e}")
                     last_motor_cmd = "STOP"
 
                 if cmd and cmd != 'STOP':
-                    # 0.1秒だけ動かす (連打対応)
-                    md.move(cmd, power=0.7, duration=0.1, is_inverted=is_inverted, enable_stack_check=False)
-                    last_motor_cmd = f"Move '{cmd}'"
+                    try:
+                        md.move(cmd, power=0.7, duration=0.1, is_inverted=is_inverted, enable_stack_check=False)
+                        last_motor_cmd = f"Move '{cmd}'"
+                    except Exception as e:
+                        print(f"!! MOTOR ERROR !!: {e}")
+                        try: md.stop() 
+                        except: pass
+                        last_motor_cmd = "ERROR STOP"
 
             # ---------------------------
             # ログ表示
@@ -271,20 +305,18 @@ def main():
             inv_str = "INV" if is_inverted else "NRM"
 
             if display_mode == 0: # Summary
-                l_str = f"{val(lin_acc and lin_acc[0],'5.1f')},{val(lin_acc and lin_acc[1],'5.1f')},{val(lin_acc and lin_acc[2],'5.1f')}"
-                g_str = f"{val(gyro and gyro[0],'5.1f')},{val(gyro and gyro[1],'5.1f')},{val(gyro and gyro[2],'5.1f')}"
-                gps_str = f"{curr_lat:.4f}/{curr_lon:.4f}" if curr_lat else "No Signal"
+                l_str = f"{val(lin_acc[0] if lin_acc else None,'5.1f')},{val(lin_acc[1] if lin_acc else None,'5.1f')},{val(lin_acc[2] if lin_acc else None,'5.1f')}"
+                g_str = f"{val(gyro[0] if gyro else None,'5.1f')},{val(gyro[1] if gyro else None,'5.1f')},{val(gyro[2] if gyro else None,'5.1f')}"
+                gps_str = f"{curr_lat:.4f}/{curr_lon:.4f}" if curr_lat is not None else "No Signal"
                 print(f"{order:3d} | {inv_str} | {l_str:17s} | {g_str:17s} | {val(altitude,'5.1f'):>5s}m | {gps_str:13s} | {val(dist_to_goal,'5.1f'):>6s}m | {val(angle_to_goal,'5.1f'):>5s}")
 
             elif display_mode == 1: # IMU
-                l_str = f"X:{val(lin_acc and lin_acc[0])}, Y:{val(lin_acc and lin_acc[1])}, Z:{val(lin_acc and lin_acc[2])}"
-                g_str = f"X:{val(gyro and gyro[0])}, Y:{val(gyro and gyro[1])}, Z:{val(gyro and gyro[2])}"
-                grav  = f"{val(gravity and gravity[2], '5.2f')} ({inv_str})"
-                # BNOの温度を表示
+                l_str = f"X:{val(lin_acc[0] if lin_acc else None)}, Y:{val(lin_acc[1] if lin_acc else None)}, Z:{val(lin_acc[2] if lin_acc else None)}"
+                g_str = f"X:{val(gyro[0] if gyro else None)}, Y:{val(gyro[1] if gyro else None)}, Z:{val(gyro[2] if gyro else None)}"
+                grav  = f"{val(gravity[2] if gravity else None, '5.2f')} ({inv_str})"
                 print(f"{l_str:25s} | {g_str:25s} | {grav:10s} | Temp:{val(temp)}C")
 
-            elif display_mode == 2: # BME Atmos (NEW Mode 2)
-                # 気圧と高度をメインに、温度・湿度・基準気圧も表示
+            elif display_mode == 2: # BME
                 print(f" {val(pressure, '7.2f')} hPa        | {val(altitude, '7.2f')} m          | {val(bme_temp, '5.1f')} C      | {val(humidity, '5.1f')} %      | QNH: {val(qnh, '7.2f')}")
 
             elif display_mode == 3: # GPS
@@ -297,17 +329,28 @@ def main():
             elif display_mode == 5: # Motor
                 print(f"Motor Status: {'READY' if motor_ok else 'ERROR'} | Inverted: {inv_str} | Last Action: {last_motor_cmd}")
 
+            time.sleep(0.02)
+
     except KeyboardInterrupt:
         print("\n中断されました。")
+    except Exception as e:
+        print(f"\n予期せぬエラーが発生しました: {e}")
     finally:
         print("\n終了処理中... (Motors, Camera, Sensors)")
-        if cam: cam.close()
-        if bno: bno.close()
-        if bme: bme.close()
+        if cam: 
+            try: cam.close()
+            except: pass
+        if bno: 
+            try: bno.close()
+            except: pass
+        if bme: 
+            try: bme.close()
+            except: pass
         if motor_ok:
             try: md.cleanup()
             except: pass
-        cv2.destroyAllWindows()
+        try: cv2.destroyAllWindows()
+        except: pass
         print("完了。お疲れ様でした。")
 
 if __name__ == "__main__":
