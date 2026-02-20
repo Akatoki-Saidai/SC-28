@@ -113,7 +113,11 @@ def main():
             try:
                 if phase == 5:
                     #ここにゴールフェーズの処理
-                    phase = 5
+                        while True:
+                            GPIO.output(LED_PIN, 1) # LEDオン
+                            time.sleep(1)         # 1秒待つ
+                            GPIO.output(LED_PIN, 0) # LEDオフ
+                            time.sleep(1)         # 1秒待つ
 
 
 
