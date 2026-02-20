@@ -145,7 +145,10 @@ def main():
             try: md.cleanup()
             except: pass
         if gpio_ok:
-            try: GPIO.cleanup()
+            try:
+                GPIO.output(LED_PIN, 0)
+                GPIO.output(NICHROME_PIN, 0)
+                GPIO.cleanup()
             except: pass
         try: cv2.destroyAllWindows()
         except: pass
