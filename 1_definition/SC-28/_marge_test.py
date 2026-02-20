@@ -90,6 +90,7 @@ def print_header(mode):
 # ==========================================
 def setup_sensors():
     # --- BNO055 ---
+    print("bnoセットアップ開始")
     bno = None
     try:
         bno = BNO055()
@@ -100,6 +101,7 @@ def setup_sensors():
         print(f"BNO055 Setup Error: {e}")
 
     # --- Camera ---
+    print("cameraセットアップ開始")
     cam = None
     try:
         cam = Camera(model_path="./my_custom_model.pt", debug=True)
@@ -107,6 +109,7 @@ def setup_sensors():
         print(f"Camera Setup Error: {e}")
 
     # --- BME280 ---
+    print("bmeセットアップ開始")
     bme = None
     qnh = 1013.25
     try:
@@ -120,6 +123,7 @@ def setup_sensors():
         print(f"BME280 Setup Error: {e}")
 
     # --- Motor ---
+    print("モータセットアップ開始")
     motor_ok = False
     try:
         md.setup_motors()
