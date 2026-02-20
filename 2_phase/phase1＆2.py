@@ -119,6 +119,8 @@ def main():
                     #ここに落下フェーズの処理
                     phase = 3
 
+                time.sleep(0.1)
+
 
             except Exception as e:
                 print(f"\n予期せぬエラーが発生しました: {e}")

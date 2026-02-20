@@ -119,6 +119,8 @@ def main():
                             GPIO.output(LED_PIN, 0) # LEDオフ
                             time.sleep(1)         # 1秒待つ
 
+                time.sleep(0.1)
+
 
 
             except Exception as e:

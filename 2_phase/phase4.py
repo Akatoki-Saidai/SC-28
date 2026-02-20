@@ -115,6 +115,8 @@ def main():
                     #ここに近距離フェーズの処理
                     phase = 5
 
+                time.sleep(0.1)
+
 
 
             except Exception as e:

@@ -115,6 +115,8 @@ def main():
                     #ここに遠距離フェーズの処理
                     phase = 4
 
+                time.sleep(0.1)
+
 
             except Exception as e:
                 print(f"\n予期せぬエラーが発生しました: {e}")
