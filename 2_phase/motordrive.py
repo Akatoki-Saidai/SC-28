@@ -30,6 +30,7 @@ import ijochi
 # 定数・ピン設定
 # ---------------------------------------------------------
 delta_power = 0.1 # スムーズな加速・減速のための刻み幅
+MAX_POWER_LIMIT = 6.0/8.4 #8.4V満充電時に6V相当の電圧にするための安全係数
 
 # DCモータのピン設定 (gpiozero用: BCM番号)
 # ※ 実機の配線に合わせて数値を変更してください
@@ -142,7 +143,8 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
     global motor_right, motor_left, bno
     
     # バリデーション
-    if not (0.0 <= power <= 1.0):
+    max_input = 1.0 / MAX_POWER_LIMIT #上限を約1.4まで許容するように
+    if not (0.0 <= power <= max_input):
         print("Error: power must be 0.0 - 1.0")
         return 0
     
@@ -161,7 +163,9 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
         direction = mapping.get(direction, direction)
 
     # 2. モーター値の設定関数 (内部ヘルパー)
-    def set_values(d, p):
+    def set_values(d, unsafe_p):
+        p = unsafe_p * MAX_POWER_LIMIT #ここで引数(0.0~1.0)を安全な値(0~0.71)に自動変換
+        p = min(1.0 , p) #浮動小数点の誤差で1.0を超えないように
         if d == 'w':   mr, ml = p, p
         elif d == 's': mr, ml = -p, -p
         elif d == 'a': mr, ml = p, -p  # 左旋回
