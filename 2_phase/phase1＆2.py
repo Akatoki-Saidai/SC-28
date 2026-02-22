@@ -147,71 +147,69 @@ def main():
             # ==================================
             elif phase == 2:
                 try:
-                    if not bme or not gpio_ok:
-                        phase = 3
-                        continue
+        FALL_TIMEOUT_SEC = 180.0
+        fall_start_time = time.time()
 
-                    FALL_TIMEOUT_SEC = 180.0
-                    fall_start_time = time.time()
+        consecutive_count = 0
+        REQUIRED_COUNT = 5
+        D_ALT_THRESH = 0.5
 
-                    consecutive_count = 0
-                    REQUIRED_COUNT = 5
+        _, p, _ = bme.read_all()
+        if p is None:
+            continue
 
-                    # 初期高度
-                    _, p, _ = bme.read_all()
-                    if p is None:
-                        continue
+        alt_prev = bme.altitude(p, qnh=qnh)
+        if alt_prev is None:
+            continue
 
-                    alt_prev = bme.altitude(p, qnh=qnh)
-                    if alt_prev is None:
-                        continue
+        print(f"fall start alt={alt_prev:.3f} m")
 
-                    print(f"fall start alt: {alt_prev:.3f} m")
+        while True:
 
-                    while True:
+            if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
+                print("3分経過 → 強制分離")
+                break
 
-                        # 3分タイムアウト
-                        if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
-                            print("3分経過 → 強制分離")
-                            break
+            time.sleep(1.0)
 
-                        time.sleep(1.0)
+            _, p, _ = bme.read_all()
+            if p is None:
+                continue
 
-                        _, p, _ = bme.read_all()
-                        if p is None:
-                            continue
+            alt_now = bme.altitude(p, qnh=qnh)
+            if alt_now is None:
+                continue
 
-                        alt_now = bme.altitude(p, qnh=qnh)
-                        if alt_now is None:
-                            continue
+            d_alt = abs(alt_now - alt_prev)
 
-                        d_alt = abs(alt_now - alt_prev)
-                        print(f"Δalt(1s)={d_alt:.3f} m  ({consecutive_count}/5)")
+            print(
+                f"alt={alt_now:.3f} m, "
+                f"Δalt(1s)={d_alt:.3f} m "
+                f"({consecutive_count}/{REQUIRED_COUNT})"
+            )
 
-                        if d_alt <= 0.5:
-                            consecutive_count += 1
-                        else:
-                            consecutive_count = 0
+            if alt_now <= 10.0 and d_alt <= D_ALT_THRESH:
+                consecutive_count += 1
+            else:
+                consecutive_count = 0
 
-                        if consecutive_count >= REQUIRED_COUNT:
-                            print("Landing detected")
-                            break
+            if consecutive_count >= REQUIRED_COUNT:
+                print("Landing detected")
+                break
 
-                        alt_prev = alt_now
+            alt_prev = alt_now
 
-                    # ニクロム線作動
-                    print("start nichrome wire")
-                    GPIO.output(NICHROME_PIN, 1)
-                    time.sleep(15)
-                    GPIO.output(NICHROME_PIN, 0)
-                    print("finish nichrome wire")
+        print("start nichrome wire")
+        GPIO.output(NICHROME_PIN, 1)
+        time.sleep(15)
+        GPIO.output(NICHROME_PIN, 0)
+        print("finish nichrome wire")
 
-                    phase = 3
+        phase = 3
 
-                except Exception as e:
-                    print(f"Error in falling phase: {e}")
-                    time.sleep(1)
-
+    except Exception as e:
+        print(f"Error in falling phase: {e}")
+        time.sleep(1)
             time.sleep(0.1)
 
     except KeyboardInterrupt:
@@ -254,3 +252,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
