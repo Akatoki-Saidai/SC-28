@@ -112,11 +112,113 @@ def main():
         while True:
             try:
                 if phase == 1:
+                    try:
+                        if not bme:
+                            print("BME280が使えないため待機フェーズをスキップします")
+                            phase = 2
+                            continue
+
+                        _, p, _ = bme.read_all()
+
+                        if p is None:
+                            print("BME280: read_all が None でした。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        p = ijochi.abnormal_check("bme", "pressure", p, ERROR_FLAG=True)
+
+                        alt_1 = bme.altitude(p, qnh=qnh)
+
+                        if alt_1 is None:
+                            print("BME280: altitude が None でした。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        print(f"[待機] alt: {alt_1:.3f} m, press: {p:.2f} hPa")
+
+                        # 地上から10 m以上上がったら落下フェーズへ
+                        if alt_1 >= 10.0:
+                            print("Go to falling phase")
+                            phase = 2
+                        else:
+                            print("まだ待機（alt < 10m）")
+                            time.sleep(1.0)
+
+                    except Exception as e:
+                        print(f"An error occurred in phase 1(wait): {e}")
+                        time.sleep(1)
                     #ここに待機フェーズの処理
                     phase = 2
 
                 elif phase == 2:
                     #ここに落下フェーズの処理
+                    try:
+                        if not bme:
+                            print("BME280が使えないため落下フェーズをスキップします")
+                            phase = 3
+                            continue
+
+                        if not gpio_ok:
+                            print("GPIOが使えないためニクロム線を安全に駆動できません")
+                            phase = 3
+                            continue
+
+                        consecutive_count = 0
+                        required_count = 5  # 5秒×5回 = 25秒安定で着地判定
+
+                        # 5秒窓の基準高度を取得
+                        _, p, _ = bme.read_all()
+                        if p is None:
+                            print("BME280: read_all が None でした。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        p = ijochi.abnormal_check("bme", "pressure", p, ERROR_FLAG=True)
+                        alt_ref = bme.altitude(p, qnh=qnh)
+
+                        if alt_ref is None:
+                            print("BME280: altitude(ref) が None でした。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        print(f"fall start alt_ref: {alt_ref:.3f} m")
+
+                        while consecutive_count < required_count:
+                            time.sleep(5.0)  # 5秒待つ
+
+                            _, p, _ = bme.read_all()
+                            if p is None:
+                                print("BME280: read_all が None でした。再試行します。")
+                                continue
+
+                            p = ijochi.abnormal_check("bme", "pressure", p, ERROR_FLAG=True)
+                            alt_now = bme.altitude(p, qnh=qnh)
+
+                            if alt_now is None:
+                                print("BME280: altitude(now) が None でした。再試行します。")
+                                continue
+
+                            # 5秒間の高度変化
+                            d_alt = abs(alt_now - alt_ref)
+                            print(f"alt_ref={alt_ref:.3f}, alt_now={alt_now:.3f}, |Δalt(5s)|={d_alt:.3f} m")
+
+                            # 仕様：5秒間の高度変化が0.1m以下
+                            if d_alt <= 0.1:
+                                consecutive_count += 1
+                                print(f"satisfied condition of ending falling: {consecutive_count}/{required_count}")
+                            else:
+                                consecutive_count = 0
+                                print("not satisfied condition of ending falling. reset.")
+
+                            alt_ref = alt_now  # 次の窓へ
+
+                        # ニクロム線を加熱しパラシュート分離
+                        print("start nichrome wire")
+                        GPIO.output(NICHROME_PIN, 1)
+                        time.sleep(15)
+                        GPIO.output(NICHROME_PIN, 0)
+                        print("finish nichrome wire")
+
                     phase = 3
 
                 time.sleep(0.1)
@@ -156,4 +258,5 @@ def main():
         print("完了。お疲れ様でした。")
 
 if __name__ == "__main__":
+
     main()
