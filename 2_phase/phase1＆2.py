@@ -202,8 +202,8 @@ def main():
                             d_alt = abs(alt_now - alt_ref)
                             print(f"alt_ref={alt_ref:.3f}, alt_now={alt_now:.3f}, |Δalt(5s)|={d_alt:.3f} m")
 
-                            # 仕様：5秒間の高度変化が0.1m以下
-                            if d_alt <= 0.1:
+                            # 仕様：5秒間の高度変化が0.5m以下
+                            if d_alt <= 0.5:
                                 consecutive_count += 1
                                 print(f"satisfied condition of ending falling: {consecutive_count}/{required_count}")
                             else:
@@ -260,3 +260,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
