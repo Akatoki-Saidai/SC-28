@@ -19,6 +19,7 @@ try:
     from bme280 import BME280Sensor
     from gps import idokeido, calculate_distance_and_angle
     import motordrive as md
+    import ijochi
 except ImportError as e:
     print(f"【警告】モジュール読み込みエラー: {e}")
     print("一部の機能が制限されますが、続行します。")
@@ -55,7 +56,11 @@ def setup_sensors():
     try:
         bme = BME280Sensor(debug=False)
         if bme.calib_ok:
+            for _ in range(20):
+                bme.read_data()
             qnh = bme.baseline()
+            _, base_pressure, _ = bme.read_all()
+            print(f"ベースライン気圧: {base_pressure:.2f} hPa, qnh: {qnh:.2f} hPa")
         else:
             print("BME280: Calibration Failed")
             bme = None
@@ -78,7 +83,6 @@ def setup_sensors():
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LED_PIN, GPIO.OUT)
         GPIO.setup(NICHROME_PIN, GPIO.OUT)
-
         GPIO.output(LED_PIN, 0)
         GPIO.output(NICHROME_PIN, 0)
         gpio_ok = True
@@ -93,30 +97,19 @@ def setup_sensors():
 # ==========================================
 def main():
 
-    GOAL_LAT = 35.000000
-    GOAL_LON = 139.000000
-
     bno, cam, bme, qnh, motor_ok, gpio_ok = setup_sensors()
-
-    print("\n=== デバイス接続状況 ===")
-    print(f"* BNO055 : {'OK' if bno else 'Skip'}")
-    print(f"* Camera : {'OK' if cam else 'Skip'}")
-    print(f"* BME280 : {'OK' if bme else 'Skip'}")
-    print(f"* Motors : {'OK' if motor_ok else 'Skip'}")
-    print("========================\n")
 
     phase = 1
 
     try:
         while True:
 
-            # ==================================
+            # ==========================
             # 待機フェーズ
-            # ==================================
+            # ==========================
             if phase == 1:
                 try:
                     if not bme:
-                        print("BME280が使えないため待機フェーズをスキップします")
                         phase = 2
                         continue
 
@@ -130,11 +123,33 @@ def main():
                         time.sleep(0.5)
                         continue
 
-                    print(f"[待機] alt: {alt:.3f} m")
+                    print(f"[待機] alt={alt:.3f} m")
 
                     if alt >= 10.0:
-                        print("Go to falling phase")
-                        phase = 2
+                        print("高度10m超え → 下降確認へ")
+                        alt_prev = alt
+                        descending_count = 0
+
+                        while True:
+                            time.sleep(1.0)
+                            _, p, _ = bme.read_all()
+                            if p is None:
+                                continue
+                            alt_now = bme.altitude(p, qnh=qnh)
+                            if alt_now is None:
+                                continue
+
+                            if alt_now < alt_prev:
+                                descending_count += 1
+                            else:
+                                descending_count = 0
+
+                            if descending_count >= 2:
+                                print("下降開始確認 → 落下フェーズへ")
+                                phase = 2
+                                break
+
+                            alt_prev = alt_now
                     else:
                         time.sleep(1.0)
 
@@ -142,9 +157,9 @@ def main():
                     print(f"Error in wait phase: {e}")
                     time.sleep(1)
 
-            # ==================================
+            # ==========================
             # 落下フェーズ
-            # ==================================
+            # ==========================
             elif phase == 2:
                 try:
                     if not bme or not gpio_ok:
@@ -156,8 +171,8 @@ def main():
 
                     consecutive_count = 0
                     REQUIRED_COUNT = 5
+                    D_ALT_THRESH = 0.5  # ★閾値0.5m
 
-                    # 初期高度
                     _, p, _ = bme.read_all()
                     if p is None:
                         continue
@@ -166,11 +181,10 @@ def main():
                     if alt_prev is None:
                         continue
 
-                    print(f"fall start alt: {alt_prev:.3f} m")
+                    print(f"fall start alt={alt_prev:.3f} m")
 
                     while True:
 
-                        # 3分タイムアウト
                         if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
                             print("3分経過 → 強制分離")
                             break
@@ -186,9 +200,15 @@ def main():
                             continue
 
                         d_alt = abs(alt_now - alt_prev)
-                        print(f"Δalt(1s)={d_alt:.3f} m  ({consecutive_count}/5)")
 
-                        if d_alt <= 0.5:
+                        print(
+                            f"alt={alt_now:.3f} m, "
+                            f"Δalt(1s)={d_alt:.3f} m "
+                            f"({consecutive_count}/{REQUIRED_COUNT})"
+                        )
+
+                        # ★高度10m以下かつ安定しているときのみカウント
+                        if alt_now <= 10.0 and d_alt <= D_ALT_THRESH:
                             consecutive_count += 1
                         else:
                             consecutive_count = 0
@@ -199,7 +219,6 @@ def main():
 
                         alt_prev = alt_now
 
-                    # ニクロム線作動
                     print("start nichrome wire")
                     GPIO.output(NICHROME_PIN, 1)
                     time.sleep(15)
@@ -218,7 +237,7 @@ def main():
         print("\n中断されました。")
 
     finally:
-        print("\n終了処理中...")
+        print("終了処理中...")
 
         if cam:
             try: cam.close()
@@ -249,7 +268,7 @@ def main():
         except:
             pass
 
-        print("完了。お疲れ様でした。")
+        print("完了。")
 
 
 if __name__ == "__main__":
