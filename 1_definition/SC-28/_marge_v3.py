@@ -159,6 +159,17 @@ def setup_camera():
         print(f"Camera Setup Error: {e}")
     return cam
 
+def close_camera(cam):
+    """カメラとAIモデルを安全に停止し、メモリ・リソースを解放する"""
+    if cam is not None:
+        print("📷 カメラを停止し、リソースを解放します...")
+        try:
+            cam.close()
+        except Exception as e:
+            print(f"Camera Close Error: {e}")
+    # 完全に空っぽ(None)にして返すのがポイント
+    return None
+
 # ==========================================
 # メイン処理
 # ==========================================
