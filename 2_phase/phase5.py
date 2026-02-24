@@ -1,14 +1,30 @@
 #待機フェーズ＆落下フェーズ
+import os
 import time
 import cv2
 import sys
 import math
 import numpy as np
+import datetime
 import RPi.GPIO as GPIO
 
-# --- ピン設定 ---
+# ==========================================
+# ピン配置設定
+# ==========================================
 LED_PIN = 5
-NICHROME_PIN = 16
+NICHROME_PIN = 16  # ニクロム線のピンも定義しておく
+
+# ==========================================
+# --- ディレクトリ設定 (画像保存用) ---
+# ==========================================
+
+# 画像を保存する専用フォルダの絶対パス
+PIC_DIR = '/home/sc28/SC-28/5_log/picture'
+
+# プログラム起動時の日時を取得して、今回の保存用サブフォルダを決定
+# (例: /home/pi/SC-28_Pictures/run_20260224_133200)
+session_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+SESSION_SAVE_DIR = os.path.join(PIC_DIR, f"run_{session_time}")
 
 # ==========================================
 # モジュール読み込み
@@ -25,9 +41,42 @@ except ImportError as e:
     time.sleep(2)
 
 # ==========================================
+# ヘルパー関数
+# ==========================================
+def save_frame_if_needed(frame, last_save_time, interval=1.0, save_dir=SESSION_SAVE_DIR):
+    """
+    指定した間隔(interval)で画像を、今回の実行用サブフォルダに保存する。
+    戻り値: 更新された last_save_time
+    """
+    current_time = time.time()
+    # 前回保存時から interval 秒以上経過していたら保存
+    if (current_time - last_save_time) >= interval:
+        # フォルダが存在しなければ作成（起動後最初の1回目に作られます）
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except Exception as e:
+                print(f"フォルダ作成エラー: {e}")
+                return current_time # 保存失敗でも保存時間を更新することで負荷対策
+
+        # ファイル名（例: img_1684300000.jpg）を作成して保存
+        filename = os.path.join(save_dir, f"img_{int(current_time)}.jpg")
+        try:
+            cv2.imwrite(filename, frame)
+            # print(f"📸 画像保存: {filename}") # 必要に応じてコメントアウト解除
+        except Exception as e:
+            print(f"画像保存エラー: {e}")
+            
+        return current_time # 保存時間を更新して返す
+        
+    return last_save_time
+
+
+# ==========================================
 # セットアップ
 # ==========================================
 def setup_sensors():
+    """カメラ以外の基本センサーとハードウェアのセットアップ"""
     # --- BNO055 ---
     print("bnoセットアップ開始")
     bno = None
@@ -38,14 +87,6 @@ def setup_sensors():
             bno = None
     except Exception as e:
         print(f"BNO055 Setup Error: {e}")
-
-    # --- Camera ---
-    print("cameraセットアップ開始")
-    cam = None
-    try:
-        cam = Camera(model_path="./my_custom_model.pt", debug=True)
-    except Exception as e:
-        print(f"Camera Setup Error: {e}")
 
     # --- BME280 ---
     print("bmeセットアップ開始")
@@ -85,8 +126,35 @@ def setup_sensors():
     except Exception as e:
         print(f"GPIO Setup Error: {e}")
 
-    # returnに gpio_ok も追加して返す
-    return bno, cam, bme, qnh, motor_ok, gpio_ok
+    return bno, bme, qnh, motor_ok, gpio_ok
+
+def setup_camera():
+    """カメラとAIモデルのセットアップ（必要な時に呼び出す）"""
+    print("cameraセットアップ開始")
+    cam = None
+    try:
+        cam = Camera(model_path="./my_custom_model.pt", debug=True)
+    except Exception as e:
+        print(f"Camera Setup Error: {e}")
+    return cam
+
+def close_camera(cam):
+    """カメラとAIモデルを安全に停止し、メモリ・リソースを解放する"""
+    if cam is not None:
+        print("📷 カメラを停止し、リソースを解放します...")
+        try:
+            cam.close()
+        except Exception as e:
+            print(f"Camera Close Error: {e}")
+    # 完全に空っぽ(None)にして返すのがポイント
+    return None
+
+prev_lat, prev_lon = None, None
+
+first_data_fetched = False
+last_gps_error_time = 0
+
+last_image_save_time = 0
 
 # ==========================================
 # メイン処理
@@ -97,7 +165,8 @@ def main():
     GOAL_LAT = 35.000000
     GOAL_LON = 139.000000
 
-    bno, cam, bme, qnh, motor_ok, gpio_ok = setup_sensors()
+    bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
+    cam = setup_camera()
 
     print("\n=== デバイス接続状況 ===")
     print(f"* BNO055 : {'OK' if bno else 'Skip'}")
