@@ -97,6 +97,9 @@ def main():
     GOAL_LAT = 35.000000
     GOAL_LON = 139.000000
 
+    # 👇 【重要】事前に測定した機体の旋回角速度 (度/秒) を入力してください
+    OMEGA_DEG_PER_SEC = 90.0  # 例: 1秒間に90度旋回する機体の場合
+
     bno, cam, bme, qnh, motor_ok, gpio_ok = setup_sensors()
 
     print("\n=== デバイス接続状況 ===")
@@ -113,44 +116,105 @@ def main():
             try:
                 if phase == 3:
                     try:
-                        curr_lat, curr_lon = idokeido()#現在の緯度経度を取得する
-                        prev_lat, prev_lon = curr_lat, curr_lon
+
+                        print("\n--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
+                        
+                        # --- 【準備】機体の上下（裏返し）を判定 ---
+                        if bno:
+                            gravity = bno.gravity()
+                            if gravity is not None and gravity[2] < -2.0:
+                                is_inverted = True
+                                print("🔄 機体が逆さまです！反転モードで走行します。")
+                            else:
+                                is_inverted = False
+
+                        # --- ① 最初のGPS取得 ---
+                        curr_lat, curr_lon = idokeido()
                         if curr_lat is None or curr_lon is None:
-                            print('緯度と経度の取得に失敗しました。')
+                            # フローチャート通り、最初の取得に失敗したらフェーズ4(近距離)へ
+                            print("❌ 最初のGPS取得に失敗しました。近距離フェーズ(4)へ移行します。")
                             phase = 4
                             continue
-                        else:#緯度経度の取得に成功したとき
-                            #まずは、機体が逆さまになっているかどうかを判断する
-                            if gravity[2] < -2.0:#重力加速度のz成分が-2.0未満ならば、機体が逆さまになっていると判断する
-                                is_inverted=True
-                                md.move('w', power=0.7, duration=5, is_inverted=is_inverted, enable_stack_check=False)#逆さまのときは、モーターの回転方向を反転させて前進するようにする
-                            else:#機体が逆さまになっていないと判断する
-                                is_inverted=False
-                                md.move('w', power=0.7, duration=5, is_inverted=is_inverted, enable_stack_check=False)#通常のときは、モーターの回転方向を反転させずに前進するようにする
-                            while True:
-                                curr_lat, curr_lon = idokeido()#緯度経度の取得
-                                if curr_lat is None or curr_lon is None:
-                                    print('緯度と経度の取得に失敗しました。')
-                                    phase = 4
-                                    break
-                                d, ang_rad = calculate_distance_and_angle(curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON)#現在地と前回地、ゴールの緯度経度から、現在地とゴールの距離と角度を計算する
-                                md.move('w', power=0.7, duration=5, is_inverted=is_inverted, enable_stack_check=False)
-                                #回転の方向と、回転の時間を指定してしていないので、計算方法は後でやります。 time=rad/ω, 左右はang_radの符号で判断する予定。ひとつ前の行に入れよう
-                                prev_lat, prev_lon = curr_lat, curr_lon#後に距離を出すため動く前の地点の緯度経度を保存
-                                if enable_stack_check == True:
-                                    md.move('s', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
-                                    md.move('d', power=0.7, duration=1, is_inverted=is_inverted, enable_stack_check=False)
-                                    md.move('w', power=0.7, duration=2, is_inverted=is_inverted, enable_stack_check=False)
-                                    continue
-                                if d < 10: # 距離が10メートル未満ならゴールに近づいたと判断
-                                    print("近距離フェーズに移行します")
-                                    phase = 4
-                                    break
+                        
+                        # 基準点として保存
+                        prev_lat, prev_lon = curr_lat, curr_lon
+
+                        # --- ② 方位把握のための初期前進 (サブキャリア離脱) ---
+                        print("🚀 方位を計算するため、初期前進 (5秒) を行います！")
+                        if motor_ok:
+                            # スタック検知はOFFにして確実に5秒進む
+                            md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=False)
+
+                        # ==========================================
+                        # ③ ゴールに向かうメインループ
+                        # ==========================================
+                        while phase == 3:
+                            # 姿勢の最新状態を随時チェック
+                            if bno:
+                                gravity = bno.gravity()
+                                is_inverted = (gravity is not None and gravity[2] < -2.0)
+
+                            # GPS取得（動いた後の現在地）
+                            curr_lat, curr_lon = idokeido()
+                            if curr_lat is None or curr_lon is None:
+                                print("⚠️ GPSを見失いました。少し待機します...")
+                                time.sleep(1)
+                                continue
+
+                            # ④ ゴールとの距離と、自分の方位との「ズレ（角度）」を計算
+                            d, ang_rad = calculate_distance_and_angle(
+                                curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON
+                            )
+                            
+                            # エラー値(272727...)が返ってきたらスキップ
+                            if d > 1000000:
+                                time.sleep(1)
+                                continue
+
+                            deg_diff = math.degrees(ang_rad)
+                            print(f"📍 GPS: ゴールまで残り {d:.2f}m / 角度のズレ {deg_diff:.1f}度")
+
+                            # ⑤ ゴール判定（距離10m以下でフェーズ4へ）
+                            if d <= 10.0:
+                                print("🎯 ゴール10m圏内に到達！近距離フェーズへ移行します。")
+                                phase = 4
+                                break
+
+                            # ⑥ ゴールの方を向く（回転）
+                            if motor_ok:
+                                if abs(deg_diff) > 15.0:
+                                    # 【計算】必要な回転時間 ＝ ズレている角度 ÷ 1秒あたりの角速度
+                                    turn_time = abs(deg_diff) / OMEGA_DEG_PER_SEC
+                                    
+                                    # 安全対策: 万が一異常な角度が出たときのために、回転時間の最大値を設定（例: 5.0秒）
+                                    turn_time = min(turn_time, 5.0)
+
+                                    if deg_diff > 15.0:
+                                        print(f"↪️ 右に旋回してゴールの方を向きます (計算時間: {turn_time:.2f}秒)")
+                                        md.move('d', power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
+                                    elif deg_diff < -15.0:
+                                        print(f"↩️ 左に旋回してゴールの方を向きます (計算時間: {turn_time:.2f}秒)")
+                                        md.move('a', power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
+
+                            # ⑦ ゴールに向けて前進 ＆ スタック検知
+                            print("⬆️ ゴールに向けて前進します")
+                            if motor_ok:
+                                # motordrive側の検知条件が「2秒以上」なので、durationは必ず2.0以上にします。
+                                is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+
+                                # ⑧ スタック検知とリカバリー（motordriveに完全お任せ！）
+                                if is_stacked:
+                                    print("💥 スタックを検知！自動リカバリー行動を開始します。")
+                                    md.check_stuck(is_stacked, is_inverted=is_inverted)
+
+                            # ⑨ 次のループの計算のために、今いる場所を「過去の場所」として保存
+                            prev_lat, prev_lon = curr_lat, curr_lon
+                            time.sleep(0.1)
                     except Exception as e:
                         print(f"Error in wait phase: {e}")
-                        time.sleep(1)   
+                        time.sleep(1)
 
-                        phase = 4
+
 
                 time.sleep(0.1)
 
