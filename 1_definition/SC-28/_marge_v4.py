@@ -121,6 +121,7 @@ def save_frame_if_needed(frame, last_save_time, interval=1.0, save_dir=SESSION_S
                 os.makedirs(save_dir)
             except Exception as e:
                 print(f"フォルダ作成エラー: {e}")
+                return current_time # 保存失敗でも保存時間を更新することで負荷対策
 
         # ファイル名（例: img_1684300000.jpg）を作成して保存
         filename = os.path.join(save_dir, f"img_{int(current_time)}.jpg")
