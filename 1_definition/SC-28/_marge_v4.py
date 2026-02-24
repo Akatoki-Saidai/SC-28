@@ -143,27 +143,40 @@ def setup_sensors():
     # --- BNO055 ---
     print("bnoセットアップ開始")
     bno = None
-    try:
-        bno = BNO055()
-        if not bno.begin():
-            print("BNO055: Init Failed")
-            bno = None
-    except Exception as e:
-        print(f"BNO055 Setup Error: {e}")
+    for attempt in range(10):
+        try:
+            temp_bno = BNO055()
+            if temp_bno.begin():
+                bno = temp_bno
+                print(f"  -> BNO055: Setup Success (試行回数: {attempt + 1})")
+                break
+            else:
+                print(f"  -> BNO055: Init Failed (試行回数: {attempt + 1}/10)")
+        except Exception as e:
+            print(f"  -> BNO055 Setup Error: {e} (試行回数: {attempt + 1}/10)")
+        time.sleep(0.5)
 
     # --- BME280 ---
     print("bmeセットアップ開始")
     bme = None
     qnh = 1013.25
-    try:
-        bme = BME280Sensor(debug=False)
-        if bme.calib_ok:
-            qnh = bme.baseline()
-        else:
-            print("BME280: Calibration Failed")
-            bme = None
-    except Exception as e:
-        print(f"BME280 Setup Error: {e}")
+    
+    # 最大10回リトライする
+    for attempt in range(10):
+        try:
+            temp_bme = BME280Sensor(debug=False)
+            if temp_bme.calib_ok:
+                qnh = temp_bme.baseline()
+                bme = temp_bme  # 成功したら正式に代入
+                print(f"BME280: Setup Success (試行回数: {attempt + 1})")
+                break  # 成功したのでループを抜ける
+            else:
+                print(f"BME280: Calibration Failed (試行回数: {attempt + 1}/10)")
+                temp_bme.close() # 失敗したインスタンスは閉じる
+        except Exception as e:
+            print(f"BME280 Setup Error: {e} (試行回数: {attempt + 1}/10)")
+        
+        time.sleep(0.5)  # 失敗した場合、0.5秒待ってから再試行
 
     # --- Motor ---
     print("モータセットアップ開始")
