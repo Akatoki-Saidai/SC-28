@@ -109,7 +109,6 @@ def setup_sensors():
                 break  # 成功したのでループを抜ける
             else:
                 print(f"BME280: Calibration Failed (試行回数: {attempt + 1}/10)")
-                temp_bme.close() # 失敗したインスタンスは閉じる
         except Exception as e:
             print(f"BME280 Setup Error: {e} (試行回数: {attempt + 1}/10)")
         
@@ -162,12 +161,7 @@ def close_camera(cam):
     # 完全に空っぽ(None)にして返すのがポイント
     return None
 
-prev_lat, prev_lon = None, None
 
-first_data_fetched = False
-last_gps_error_time = 0
-
-last_image_save_time = 0
 
 # ==========================================
 # メイン処理
@@ -187,6 +181,13 @@ def main():
     print(f"* BME280 : {'OK' if bme else 'Skip'}")
     print(f"* Motors : {'OK' if motor_ok else 'Skip'}")
     print("========================\n")
+
+    prev_lat, prev_lon = None, None
+
+    first_data_fetched = False
+    last_gps_error_time = 0
+
+    last_image_save_time = 0
 
     phase = 5
 
