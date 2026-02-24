@@ -258,6 +258,8 @@ def main():
     # LEDの現在の状態を保持する変数
     led_state = False
 
+    last_image_save_time = 0
+
     try:
         while True:
             # ---------------------------
