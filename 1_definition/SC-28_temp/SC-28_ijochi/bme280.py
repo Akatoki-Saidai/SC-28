@@ -1,6 +1,13 @@
 import time
 import pigpio
 
+# ★ make_csvをインポート
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
 
 def _s8(x: int) -> int:
     x &= 0xFF
@@ -243,16 +250,23 @@ class BME280Sensor:
         return var_h
 
     # まとめて取得・計算するAPI（推奨）
-    # 1回のI2C通信で全ての値を計算し、タイミングズレを防ぐ
     def read_all(self):
         temp_raw, pres_raw, hum_raw = self.read_data()
         if temp_raw is None:
             return None, None, None
 
-        # read_data() 内で compensate_T を呼んで t_fine は更新済み
         t = self.t_fine / 5120.0
         p = self.compensate_P(pres_raw)
         h = self.compensate_H(hum_raw)
+        
+        # ★ ここでまとめてCSV書き込み
+        if make_csv:
+            try:
+                make_csv.print('temp', t)
+                make_csv.print('press', p)
+            except Exception:
+                pass
+                
         return t, p, h
 
     # 互換性のための個別取得メソッド
@@ -260,13 +274,33 @@ class BME280Sensor:
         _, pres_raw, _ = self.read_data()
         if pres_raw is None:
             return None
-        return self.compensate_P(pres_raw)
+            
+        p = self.compensate_P(pres_raw)
+        
+        # ★ CSV書き込み処理を追加
+        if make_csv:
+            try:
+                make_csv.print('press', p)
+            except Exception:
+                pass
+                
+        return p
 
     def temperature(self):
         temp_raw, _, _ = self.read_data()
         if temp_raw is None:
             return None
-        return self.compensate_T(temp_raw)
+            
+        t = self.compensate_T(temp_raw)
+        
+        # ★ CSV書き込み処理を追加
+        if make_csv:
+            try:
+                make_csv.print('temp', t)
+            except Exception:
+                pass
+                
+        return t
 
     def humidity(self):
         _, _, hum_raw = self.read_data()
@@ -274,7 +308,6 @@ class BME280Sensor:
             return None
         return self.compensate_H(hum_raw)
 
-    # (1) 修正：標準的な気圧高度式（m）
     def altitude(self, pressure, qnh=1013.25):
         """
         pressure: hPa（compensate_Pの戻り）
@@ -284,11 +317,19 @@ class BME280Sensor:
         if pressure is None:
             return None
         try:
-            return 44330.0 * (1.0 - (pressure / qnh) ** 0.1903)
+            alt = 44330.0 * (1.0 - (pressure / qnh) ** 0.1903)
+            
+            # ★ CSV書き込み処理を追加
+            if make_csv:
+                try:
+                    make_csv.print('alt', alt)
+                except Exception:
+                    pass
+                    
+            return alt
         except Exception:
             return None
 
-    # (2) 修正：ウォームアップ(最初の25個)を捨てて平均
     def baseline(self):
         if not self.calib_ok:
             if self.debug:
@@ -300,6 +341,7 @@ class BME280Sensor:
             print("Calibrating Altitude (baseline pressure)...")
 
         for _ in range(100):
+            # 初期化時の読み込みなので、ここでは一旦 read_all を使います
             _, p, _ = self.read_all()
             if p is not None:
                 baseline_values.append(p)
@@ -309,7 +351,7 @@ class BME280Sensor:
             return 1013.25
 
         if len(baseline_values) > 25:
-            vals = baseline_values[25:]  # ★ここが変更点
+            vals = baseline_values[25:]
             return sum(vals) / len(vals)
 
         return sum(baseline_values) / len(baseline_values)
@@ -319,6 +361,7 @@ if __name__ == "__main__":
     sensor = BME280Sensor(debug=False)
     try:
         while True:
+            # テスト時は read_all で取得
             t, p, h = sensor.read_all()
 
             if p is not None and t is not None and h is not None:
