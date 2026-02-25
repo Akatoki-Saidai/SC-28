@@ -1,6 +1,7 @@
 #---------------------------------------------------------------------
 # 未確認コードのため，入れ替え必須
 # _marge_test.py 実行用に追加(2/18)
+# - Added Auto CSV logging for motor outputs
 #---------------------------------------------------------------------
 import RPi.GPIO as GPIO  # GPIOモジュールをインポート
 from gpiozero import Motor
@@ -23,7 +24,13 @@ except Exception as e:
     print(f"Error initializing BNO055 in motordrive: {e}")
     bno = None
 
-import make_csv
+# ★ make_csvを安全にインポート
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
 import ijochi
 
 # ---------------------------------------------------------
@@ -81,7 +88,9 @@ def setup_motors():
         setup_gpio() # LEDなども一緒に準備
     except Exception as e:
         print(f"Motor Setup Error: {e}")
-        make_csv.print('serious_error', f"Motor Setup Error: {e}")
+        if make_csv:
+            try: make_csv.print('serious_error', f"Motor Setup Error: {e}")
+            except Exception: pass
         motor_right = None
         motor_left = None
 
@@ -127,6 +136,12 @@ def stop():
 
     motor_right.value = 0.0
     motor_left.value = 0.0
+    
+    # ★ 停止完了をCSVに記録
+    if make_csv:
+        try: make_csv.print('motor', (0.0, 0.0))
+        except Exception: pass
+        
     time.sleep(0.1)
 
 def move(direction, power, duration, is_inverted=False, enable_stack_check=True):
@@ -176,6 +191,12 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
         
         motor_right.value = mr
         motor_left.value = ml
+        
+        # ★ CSVへの出力記録 (左右の出力をタプルで渡す)
+        if make_csv:
+            try: make_csv.print('motor', (ml, mr)) # 左, 右の順
+            except Exception: pass
+            
         return True
 
     # 3. 加速フェーズ
@@ -216,7 +237,8 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
                         break
                     
                     # 異常値フィルタ
-                    gyro = ijochi.abnormal_check("bno", "gyro", gyro, ERROR_FLAG=False)
+                    # ijochi側が関数を受け取るようになった仕様に合わせる
+                    gyro = ijochi.abnormal_check("bno", "gyro", lambda: gyro, ERROR_FLAG=False)
                     if gyro is None:
                         stack_detected = False
                         break
@@ -238,7 +260,9 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
                 # スタック確定時の処理
                 if stack_detected:
                     print("Stack Detected!")
-                    make_csv.print('warning', 'stacking detected')
+                    if make_csv:
+                        try: make_csv.print('warning', 'stacking detected')
+                        except Exception: pass
                     is_stacked = 1
                     break 
 
@@ -286,7 +310,9 @@ def check_stuck(is_stacked, is_inverted=False):
             
         except Exception as e:
             print(f"Error in check_stuck: {e}")
-            make_csv.print("error", f"check_stuck error: {e}")
+            if make_csv:
+                try: make_csv.print("error", f"check_stuck error: {e}")
+                except Exception: pass
 
 if __name__ == "__main__":
     # 単体テスト用

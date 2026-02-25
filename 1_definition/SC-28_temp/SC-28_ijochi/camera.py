@@ -1,13 +1,21 @@
-# Modified for CanSat SC-28 (Final Production V3)
+# Modified for CanSat SC-28 (Final Production V3 + CSV Logging)
 # - Added is_inverted logic for correct steering when upside down
 # - Fixes: OpenCV findContours compatibility, bitwise_or
 # - YOLO throttling
+# - Auto CSV logging for camera data
 
 import time
 import cv2
 import numpy as np
 from picamera2 import Picamera2
 from ultralytics import YOLO
+
+# ★ make_csvをインポート (安全な読み込み)
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
 
 
 class Camera:
@@ -145,6 +153,7 @@ class Camera:
             # 3. 赤色領域の解析
             red_area = 0.0
             red_center_x = frame_center_x
+            red_center_y = height // 2
             red_rect = (0, 0, 0, 0)
 
             contours = self._find_contours_compat(mask)
@@ -158,11 +167,16 @@ class Camera:
                     red_area = float(area_tmp)
                     red_rect = cv2.boundingRect(biggest_contour)
                     red_center_x = red_rect[0] + red_rect[2] // 2
+                    red_center_y = red_rect[1] + red_rect[3] // 2
 
             red_percent = red_area / float(width * height)
 
             camera_order = 0
             target_x_percent = 0.0
+            
+            # 最終的に検知した対象の中心座標 (CSV用)
+            detected_center_x = red_center_x
+            detected_center_y = red_center_y
 
             # --- 判定ロジック ---
 
@@ -233,6 +247,7 @@ class Camera:
 
                                     xmin, ymin, xmax, ymax = map(int, box)
                                     yolo_center_x = (xmin + xmax) // 2
+                                    yolo_center_y = (ymin + ymax) // 2
 
                                     target_x_percent = (yolo_center_x - frame_center_x) / float(width)
                                     
@@ -243,6 +258,10 @@ class Camera:
                                     target_x_percent = max(-0.5, min(0.5, target_x_percent))
                                     camera_order = self._decide_direction(target_x_percent)
                                     yolo_found = True
+                                    
+                                    # CSV用に座標を上書き
+                                    detected_center_x = yolo_center_x
+                                    detected_center_y = yolo_center_y
 
                                     # 描画
                                     cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
@@ -284,6 +303,17 @@ class Camera:
             inv_str = "INV" if is_inverted else "NRM"
             info = f"Ord:{camera_order} {inv_str} X:{target_x_percent:.2f}"
             cv2.putText(frame, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # ★ CSVへの自動保存
+            if make_csv:
+                try:
+                    make_csv.print('camera_order', camera_order)
+                    make_csv.print('camera_area', red_area)
+                    # XY座標はタプルで渡すと make_csv が自動で _x, _y 列に振り分けてくれる
+                    make_csv.print('camera_center', (detected_center_x, detected_center_y))
+                    make_csv.print('camera_frame_size', (width, height))
+                except Exception:
+                    pass
 
             return frame, target_x_percent, camera_order, red_area
 
