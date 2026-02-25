@@ -33,7 +33,7 @@ def create_dummy_image(text="No Camera Signal"):
 def show_startup_manual():
     """起動時の操作マニュアルを表示"""
     print("\n" + "="*60)
-    print("      SC-28 統合テストプログラム (Rev.3 ijochi対応版)")
+    print("      SC-28 統合テストプログラム (Rev.4 Auto-Log対応版)")
     print("="*60)
     print("このプログラムは、搭載されたセンサーとモーターの動作確認を行います。")
     print("エラーが発生した場合、詳細が表示されます。\n")
@@ -78,7 +78,6 @@ def print_header(mode):
     elif mode == 1:
         print("[Mode 1: IMU DETAIL] LinAccel(X,Y,Z)       | Gyro(X,Y,Z)           | Gravity(Z) | Heading(Euler) | Temp")
     elif mode == 2:
-        # ★ BMEの表示から温度と湿度を削除し、スッキリさせました
         print("[Mode 2: BME ATMOS]  Pressure (hPa)   | Relative Alt (m) | Baseline(QNH)")
     elif mode == 3:
         print("[Mode 3: GPS NAV]    Lat / Lon             | Dist to Goal | Ang to Goal | Rel.Alt | Pressure")
@@ -180,17 +179,18 @@ def main():
             is_inverted = False
             order, x_pct, area = 0, 0.0, 0.0
             frame = None
-            altitude, pressure = None, None # ★ bme_temp, humidity は使用しないため削除
+            altitude, pressure = None, None
             curr_lat, curr_lon = None, None
             dist_to_goal, angle_to_goal = None, None
 
             # --- BNO055 ---
             if bno:
                 try:
-                    lin_acc = abnormal_check("bno", "linear_accel", bno.linear_acceleration, ERROR_FLAG=False)
+                    # ★ CSVラベルに合わせて名前を統一
+                    lin_acc = abnormal_check("bno", "accel_line", bno.linear_acceleration, ERROR_FLAG=False)
                     gyro    = abnormal_check("bno", "gyro", bno.gyroscope, ERROR_FLAG=False)
-                    gravity = abnormal_check("bno", "gravity", bno.gravity, ERROR_FLAG=False)
-                    temp    = abnormal_check("bno", "temperature", bno.temperature, ERROR_FLAG=False)
+                    gravity = abnormal_check("bno", "grav", bno.gravity, ERROR_FLAG=False)
+                    temp    = abnormal_check("bno", "temp", bno.temperature, ERROR_FLAG=False)
                     euler   = bno.euler()
                     
                     if gravity is not None and gravity[2] < -2.0:
@@ -208,8 +208,8 @@ def main():
             # --- BME280 (気圧のみ) ---
             if bme:
                 try:
-                    # ★ 気圧取得専用メソッドを渡し、lambdaは不使用に
-                    pressure = abnormal_check("bme", "pressure", bme.pressure, ERROR_FLAG=False)
+                    # ★ CSVラベルに合わせて "press" に変更
+                    pressure = abnormal_check("bme", "press", bme.pressure, ERROR_FLAG=False)
                     
                     if pressure is not None: 
                         altitude = bme.altitude(pressure, qnh=qnh)
@@ -219,10 +219,10 @@ def main():
             # --- GPS ---
             if display_mode != 5:
                 try:
-                    # ★ リストを使って緯度・経度の両方を一括チェック
+                    # ★ リストを使って緯度・経度の両方を一括チェック ("lat", "lon" に変更)
                     gps_result = abnormal_check(
                         "gps", 
-                        ["latitude", "longitude"], 
+                        ["lat", "lon"], 
                         idokeido, 
                         ERROR_FLAG=False, 
                         max_retries=2, 
@@ -230,7 +230,7 @@ def main():
                     )
 
                     if gps_result is not None:
-                        curr_lat, curr_lon = gps_result # 両方正常なら展開
+                        curr_lat, curr_lon = gps_result 
                         
                         if prev_lat is None: 
                             prev_lat, prev_lon = curr_lat, curr_lon
@@ -337,7 +337,6 @@ def main():
                 print(f"{l_str:25s} | {g_str:25s} | {grav:10s} | Temp:{val(temp)}C")
 
             elif display_mode == 2: # BME
-                # ★ 出力フォーマットを気圧・高度・QNHのみに修正
                 print(f" {val(pressure, '7.2f')} hPa        | {val(altitude, '7.2f')} m          | QNH: {val(qnh, '7.2f')}")
 
             elif display_mode == 3: # GPS
