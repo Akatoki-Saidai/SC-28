@@ -53,7 +53,8 @@ def abnormal_check(value_name, read_func, ERROR_FLAG=True, max_retries=3, retry_
                             
             # パターン2: 取得値はリストだが、評価は「絶対値の合計」で行う場合
             elif isinstance(sensor_value, list) and not isinstance(value_name, (list, tuple)):
-                if all(v == 0 for v in sensor_value) and value_name != "gyro":
+                # どんな値でも全ゼロならハードウェア通信異常とみなしてリトライ
+                if all(v == 0 for v in sensor_value):
                     is_abnormal = True
                 else:
                     check_sensor_value = sum(abs(n) for n in sensor_value)
@@ -97,19 +98,23 @@ def abnormal_check(value_name, read_func, ERROR_FLAG=True, max_retries=3, retry_
                 print(f"[{value_name}] 異常値検知 (値: {sensor_value})。{retry_delay}秒後に再取得します (リトライ {attempt+1}/{max_retries})...")
                 time.sleep(retry_delay)
             else:
-                filtered_value = None
-                try:
-                    if make_csv:
-                        make_csv.print("msg", f"ijochi detected: {value_name} out of range")
-                    if ERROR_FLAG:
-                        raise ValueError(f"{value_name} is abnormal - {sensor_value}")
-                    else:
-                        print(f"[{value_name}] is abnormal: {sensor_value}")
-                except ValueError as e:
-                    print(f"Failed to pass value check: {e}")
-                except Exception as e:
-                    print(f"Logger Error: {e}")
+                # リトライ上限に達した時の処理
                 
-                return filtered_value
-
+                # 1. まずはCSVへのログ書き込みを安全に行う
+                if make_csv:
+                    try:
+                        make_csv.print("msg", f"ijochi detected: {value_name} out of range")
+                    except Exception as e:
+                        print(f"Logger Error: {e}")
+                
+                # 2. フラグに応じて例外を投げるか、Noneを返すか分岐する
+                if ERROR_FLAG:
+                    # ここで例外を投げれば、関数を抜けてプログラムが停止する（本来の正しい挙動）
+                    raise ValueError(f"{value_name} is abnormal - {sensor_value}")
+                else:
+                    # 本番環境モード：警告を出してNoneを返し、処理を続行させる
+                    print(f"[{value_name}] is abnormal: {sensor_value}")
+                    return None
+                    
+    # 万が一、全ての条件をすり抜けた場合（通常は到達しない）
     return None

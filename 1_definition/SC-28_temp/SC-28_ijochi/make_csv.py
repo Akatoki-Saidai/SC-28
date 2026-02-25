@@ -7,7 +7,11 @@ import time
 import traceback
 import os
 import builtins
+import atexit  # ★ 追加：プログラム終了時の処理用
 from datetime import datetime
+
+# ★ log_file をグローバルで初期化しておく
+log_file = None
 
 try:
     DEBUG = True 
@@ -26,7 +30,7 @@ try:
     
     DEFAULT_DICT = {x : '' for x in msg_types}
 
-    # --- 修正箇所：保存先ディレクトリの設定とパスの結合 ---
+    # 保存先ディレクトリの設定とパスの結合
     log_dir = '/home/sc28/SC-28/5_log/csv'
     
     # ディレクトリが存在しない場合は作成（エラー回避）
@@ -36,7 +40,6 @@ try:
     
     # ディレクトリパスとファイル名を結合
     filename = os.path.join(log_dir, f'log_{current_time_str}.csv')
-    # ----------------------------------------------------
 
     # ファイル作成とヘッダー書き込み
     if not os.path.exists(filename) or os.path.getsize(filename) == 0:
@@ -49,8 +52,27 @@ try:
 
 except Exception as e:
     builtins.print(f"An error occured in init csv: {e}")
+    log_file = None # ★ 重大バグ対策：失敗時は明示的にNoneにする
+
+# ★ 懸念2対策：プログラム終了時に確実にファイルを閉じる
+@atexit.register
+def _cleanup_log_file():
+    global log_file
+    if log_file:
+        try:
+            log_file.flush()
+            os.fsync(log_file.fileno()) # 最後に1回だけ確実にディスクへ書き込む
+            log_file.close()
+            builtins.print("Log file closed safely.")
+        except Exception:
+            pass
+
 
 def print(msg_type : str, msg_data):
+    # ★ 重大バグ対策：log_fileが未定義（None）なら何もせず安全にリターン
+    if log_file is None:
+        return
+
     try:
         special_keys = ['accel_all', 'accel_line', 'mag', 'gyro', 'grav', 'euler', 
                         'goal_relative', 'camera_center', 'camera_frame_size', 'motor', 'lat_lon']
@@ -112,7 +134,6 @@ def print(msg_type : str, msg_data):
             except Exception:
                 pass
 
-        # 【修正箇所】msg_typesの定義順に値を取り出してリスト化する（列ズレ防止の決定版）
         clean_values = [
             '"' + str(output_dict.get(k, '')).replace('"', '""').replace('\n', ' ') + '"'
             for k in msg_types
@@ -120,8 +141,8 @@ def print(msg_type : str, msg_data):
         output_msg = ','.join(clean_values)
 
         log_file.write(output_msg + '\n')
+        # ★ 懸念1対策：OSのバッファに送るだけに留め、SDカードへの強制書き込み(fsync)は削除
         log_file.flush()
-        os.fsync(log_file.fileno())
-
+        
     except Exception as e:
         builtins.print(f"An error occured in printing to csv: {e}")
