@@ -1,8 +1,9 @@
-# Modified for CanSat SC-28 (Final Reliable Version V3)
+# Modified for CanSat SC-28 (Final Reliable Version V3 + CSV Logic)
 # - Fixed 0.0,0.0 filter bug (or -> and)
 # - Added fix-validity checks for RMC/GGA
 # - Added auto re-open on serial disconnect
 # - Keeps Geodesic calc & EM.py angle sign compatibility
+# - Added auto CSV logging for distance, angle, and time
 
 import serial
 import pynmea2
@@ -11,8 +12,14 @@ import math
 import pyproj
 from datetime import datetime, timedelta
 
+# ★ make_csvを安全にインポート
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
 # 定数定義 (EM.pyとの互換性のため維持)
-# ※ただし、今回の修正でこの値が返る頻度は激減します
 ERROR_DISTANCE = 2727272727
 
 
@@ -127,6 +134,7 @@ class GPS:
                     if hasattr(msg, "latitude") and hasattr(msg, "longitude"):
                         # (1) 0.0,0.0 は無効データとして弾く（両方0のときだけ弾く）
                         if msg.latitude != 0.0 and msg.longitude != 0.0:
+                            # ※ ここはijochi経由でCSV保存されるため記録処理は不要
                             return msg.latitude, msg.longitude
 
                 except pynmea2.ParseError:
@@ -163,7 +171,16 @@ class GPS:
                         if msg.datestamp and msg.timestamp:
                             dt_utc = datetime.combine(msg.datestamp, msg.timestamp)
                             dt_jst = dt_utc + timedelta(hours=9)
-                            return dt_jst.strftime("%Y-%m-%d %H:%M:%S")
+                            time_str = dt_jst.strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            # ★ ijochiを通らない時刻データはここで記録
+                            if make_csv:
+                                try:
+                                    make_csv.print('gnss_time', time_str)
+                                except Exception:
+                                    pass
+                                    
+                            return time_str
                     except Exception:
                         continue
 
@@ -227,20 +244,31 @@ def calculate_distance_and_angle(current_lat, current_lon, start_lat, start_lon,
         # B: 目標方向 (Current -> Goal)
         az_goal, _, dist_goal = gps.geod.inv(current_lon, current_lat, goal_lon, goal_lat)
 
-        # 移動していない(10cm未満)場合でも、距離だけは正しく返す
-        if dist_move < 0.1:
-            return dist_goal, 0
+        theta_rad = 0
 
-        # 相対角度（EM.py互換：左+、右-）
-        diff_deg = -(az_goal - az_move)
+        # 移動していない(10cm未満)場合は距離のみを正とし、角度は0とする
+        if dist_move >= 0.1:
+            # 相対角度（EM.py互換：左+、右-）
+            diff_deg = -(az_goal - az_move)
 
-        # -180 ~ 180 に正規化
-        while diff_deg > 180:
-            diff_deg -= 360
-        while diff_deg < -180:
-            diff_deg += 360
+            # -180 ~ 180 に正規化
+            while diff_deg > 180:
+                diff_deg -= 360
+            while diff_deg < -180:
+                diff_deg += 360
 
-        theta_rad = math.radians(diff_deg)
+            theta_rad = math.radians(diff_deg)
+
+        # ★ ijochiを通らない計算データはここでまとめて記録
+        if make_csv:
+            try:
+                make_csv.print('goal_lat', goal_lat)
+                make_csv.print('goal_lon', goal_lon)
+                make_csv.print('goal_distance', dist_goal)
+                make_csv.print('goal_relative_angle_rad', theta_rad)
+            except Exception:
+                pass
+
         return dist_goal, theta_rad
 
     except Exception as e:
