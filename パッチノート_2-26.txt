@@ -1,0 +1,15 @@
+1_definition/SC-28
+    _merge_test.py　確実に動作するコード
+    _merge_v2.py    LED，ニクロム線のセットアップを追加したコード
+    _merge_v3.py    カメラのセットアップを別関数にしたコード
+    _merge_v4.py    写真を保存できる関数を追加
+    motordrive.py   モータの定格電圧が超えないように修正
+
+1_definition/SC-28_temp/SC-28_ijochi
+    ijochi.py       異常値検知時，値の再取得を試すように
+                    同時に最終的に正常と判断した値をcsvに保存するように
+    _merge_test.py  ijochi関数を用いるテストコード
+    camera.py       取得した値を自動でcsvに保存するように
+    gps.py          計算した値を自動でcsvに保存するように
+    mortordrive.py  モータの動作を自動でcsvに保存するように
+    make_csv.py     claudeが添削(SDカードへの負荷を軽減)
