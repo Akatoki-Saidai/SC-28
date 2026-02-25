@@ -262,8 +262,6 @@ def calculate_distance_and_angle(current_lat, current_lon, start_lat, start_lon,
         # ★ ijochiを通らない計算データはここでまとめて記録
         if make_csv:
             try:
-                make_csv.print('goal_lat', goal_lat)
-                make_csv.print('goal_lon', goal_lon)
                 make_csv.print('goal_distance', dist_goal)
                 make_csv.print('goal_relative_angle_rad', theta_rad)
             except Exception:
