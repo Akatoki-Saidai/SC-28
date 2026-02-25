@@ -14,7 +14,6 @@ try:
     from gps import idokeido, calculate_distance_and_angle
     import motordrive as md
     
-    # ★ ijochi.pyから異常値チェック関数をインポート
     from ijochi import abnormal_check
 except ImportError as e:
     print(f"【警告】モジュール読み込みエラー: {e}")
@@ -31,9 +30,8 @@ def create_dummy_image(text="No Camera Signal"):
     return img
 
 def show_startup_manual():
-    """起動時の操作マニュアルを表示"""
     print("\n" + "="*60)
-    print("      SC-28 統合テストプログラム (Rev.4 Auto-Log対応版)")
+    print("      SC-28 統合テストプログラム (Rev.5 最適化版)")
     print("="*60)
     print("このプログラムは、搭載されたセンサーとモーターの動作確認を行います。")
     print("エラーが発生した場合、詳細が表示されます。\n")
@@ -55,7 +53,6 @@ def show_startup_manual():
     input(">> 準備ができたら Enter キーを押してください... ")
 
 def show_motor_manual():
-    """モーターモードに入った時の操作説明"""
     print("\n" + "!"*60)
     print("      【注意】 モーター操作モード (Mode 5)")
     print("!"*60)
@@ -145,7 +142,6 @@ def main():
     cv2.imshow(window_name, dummy_frame)
     cv2.waitKey(1)
 
-    # --- 設定 ---
     GOAL_LAT = 35.000000
     GOAL_LON = 139.000000
 
@@ -186,11 +182,11 @@ def main():
             # --- BNO055 ---
             if bno:
                 try:
-                    # ★ CSVラベルに合わせて名前を統一
-                    lin_acc = abnormal_check("bno", "accel_line", bno.linear_acceleration, ERROR_FLAG=False)
-                    gyro    = abnormal_check("bno", "gyro", bno.gyroscope, ERROR_FLAG=False)
-                    gravity = abnormal_check("bno", "grav", bno.gravity, ERROR_FLAG=False)
-                    temp    = abnormal_check("bno", "temp", bno.temperature, ERROR_FLAG=False)
+                    # ★ 第一引数削除によりコードがスッキリ
+                    lin_acc = abnormal_check("accel_line", bno.linear_acceleration, ERROR_FLAG=False)
+                    gyro    = abnormal_check("gyro", bno.gyroscope, ERROR_FLAG=False)
+                    gravity = abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
+                    temp    = abnormal_check("temp", bno.temperature, ERROR_FLAG=False)
                     euler   = bno.euler()
                     
                     if gravity is not None and gravity[2] < -2.0:
@@ -205,12 +201,10 @@ def main():
                 except Exception as e:
                     if display_mode == 4: print(f"Cam Error: {e}")
 
-            # --- BME280 (気圧のみ) ---
+            # --- BME280 ---
             if bme:
                 try:
-                    # ★ CSVラベルに合わせて "press" に変更
-                    pressure = abnormal_check("bme", "press", bme.pressure, ERROR_FLAG=False)
-                    
+                    pressure = abnormal_check("press", bme.pressure, ERROR_FLAG=False)
                     if pressure is not None: 
                         altitude = bme.altitude(pressure, qnh=qnh)
                 except Exception as e:
@@ -219,15 +213,7 @@ def main():
             # --- GPS ---
             if display_mode != 5:
                 try:
-                    # ★ リストを使って緯度・経度の両方を一括チェック ("lat", "lon" に変更)
-                    gps_result = abnormal_check(
-                        "gps", 
-                        ["lat", "lon"], 
-                        idokeido, 
-                        ERROR_FLAG=False, 
-                        max_retries=2, 
-                        retry_delay=0.5
-                    )
+                    gps_result = abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=2, retry_delay=0.5)
 
                     if gps_result is not None:
                         curr_lat, curr_lon = gps_result 
