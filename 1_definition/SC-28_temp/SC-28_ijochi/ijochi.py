@@ -1,75 +1,64 @@
 import time
 
-# ★ make_csv を安全にインポート
 try:
     import make_csv
 except ImportError:
     make_csv = None
     print("Warning: make_csv module not found. Logging will be disabled in ijochi.")
 
-# ★ make_csvのキー名に合わせて名前を完全統一！
+# ★ センサーの区別をなくし、フラットな辞書に統合！
 abnormal_value_table = {
-    "bme": {
-        "temp": {"min": -10, "max": 60},
-        "humidity": {"min": 0, "max": 100}, # CSVには無いが一応残す
-        "press": {"min": 700, "max": 1100},
-    },
-    "bno": {
-        "accel_all": {"min": 0, "max": 50},
-        "gyro": {"min": 0, "max": 500},
-        "mag": {"min": 0, "max": 250},
-        "accel_line": {"min": 0, "max": 25},
-        "grav": {"min": 0, "max": 20},
-        "temp": {"min": -10, "max": 60},
-    },
-    "gps": {
-        "lat": {"min": 30, "max": 50},  
-        "lon": {"min": 130, "max": 150},
-        "alt": {"min": -100, "max": 500},
-    },
-    "distance_sensor": {
-        "distance": {"min": 0, "max": 20},
-    }
+    "temp": {"min": -10, "max": 60},      # bme, bno共通
+    "humidity": {"min": 0, "max": 100},
+    "press": {"min": 700, "max": 1100},
+    "accel_all": {"min": 0, "max": 50},
+    "gyro": {"min": 0, "max": 500},
+    "mag": {"min": 0, "max": 250},
+    "accel_line": {"min": 0, "max": 25},
+    "grav": {"min": 0, "max": 20},
+    "lat": {"min": 30, "max": 50},  
+    "lon": {"min": 130, "max": 150},
+    "alt": {"min": -100, "max": 500},
+    "distance": {"min": 0, "max": 20},
 }
 
-# csv_label引数は残しつつ、省略されたら自動生成する
-def abnormal_check(sensor_name, value_name, read_func, ERROR_FLAG=True, max_retries=3, retry_delay=0.1, csv_label=None):
+# ★ 第1引数を削除し、value_name からスタート
+def abnormal_check(value_name, read_func, ERROR_FLAG=True, max_retries=3, retry_delay=0.1, csv_label=None):
     for attempt in range(max_retries + 1):
         try:
-            # センサーから値を取得
             sensor_value = read_func()
         except Exception as e:
-            print(f"[{sensor_name} {value_name}] 値の取得時にエラー発生: {e}")
+            print(f"[{value_name}] 値の取得時にエラー発生: {e}")
             sensor_value = None
 
         is_abnormal = False
         
         if sensor_value is not None:
-            # パターン1: value_nameがリストの場合（GPSの ["lat", "lon"] など）
+            # パターン1: value_nameがリストの場合（["lat", "lon"] など）
             if isinstance(value_name, (list, tuple)) and isinstance(sensor_value, (list, tuple)):
                 if len(value_name) != len(sensor_value):
-                    print(f"[{sensor_name}] 評価項目の数と取得した値の数が一致しません")
+                    print(f"[{value_name}] 評価項目の数と取得した値の数が一致しません")
                     is_abnormal = True
                 else:
                     for v_name, val in zip(value_name, sensor_value):
                         if val is None:
                             is_abnormal = True
                             break
-                        min_val = abnormal_value_table[sensor_name][v_name]["min"]
-                        max_val = abnormal_value_table[sensor_name][v_name]["max"]
+                        min_val = abnormal_value_table[v_name]["min"]
+                        max_val = abnormal_value_table[v_name]["max"]
                         if not (min_val <= val <= max_val):
-                            print(f"[{sensor_name} {v_name}] 範囲外を検知: {val}")
+                            print(f"[{v_name}] 範囲外を検知: {val}")
                             is_abnormal = True
                             break
                             
-            # パターン2: 取得値はリストだが、評価は「絶対値の合計」で行う場合（BNOなど）
+            # パターン2: 取得値はリストだが、評価は「絶対値の合計」で行う場合
             elif isinstance(sensor_value, list) and not isinstance(value_name, (list, tuple)):
                 if all(v == 0 for v in sensor_value) and value_name != "gyro":
                     is_abnormal = True
                 else:
                     check_sensor_value = sum(abs(n) for n in sensor_value)
-                    min_val = abnormal_value_table[sensor_name][value_name]["min"]
-                    max_val = abnormal_value_table[sensor_name][value_name]["max"]
+                    min_val = abnormal_value_table[value_name]["min"]
+                    max_val = abnormal_value_table[value_name]["max"]
                     if not (min_val <= check_sensor_value <= max_val):
                         is_abnormal = True
             
@@ -78,32 +67,25 @@ def abnormal_check(sensor_name, value_name, read_func, ERROR_FLAG=True, max_retr
                 check_sensor_value = sensor_value
                 v_name = value_name if not isinstance(value_name, (list, tuple)) else value_name[0]
                 
-                min_val = abnormal_value_table[sensor_name][v_name]["min"]
-                max_val = abnormal_value_table[sensor_name][v_name]["max"]
+                min_val = abnormal_value_table[v_name]["min"]
+                max_val = abnormal_value_table[v_name]["max"]
                 if not (min_val <= check_sensor_value <= max_val):
                     is_abnormal = True
 
-            # ==========================================
-            # ★ 綺麗なデータだけをCSVに保存する究極のロジック
-            # ==========================================
+            # 綺麗なデータだけをCSVに保存
             if not is_abnormal:
                 if make_csv:
                     try:
-                        # 指定があればそれを使う
                         label_to_use = csv_label
-                        
-                        # 指定が無ければ、value_name から自動生成する！
                         if not label_to_use:
                             if isinstance(value_name, (list, tuple)):
-                                # ["lat", "lon"] なら "lat_lon" に自動変換！
                                 label_to_use = "_".join(value_name)
                             else:
-                                # "press" や "accel_line" ならそのまま！
                                 label_to_use = value_name
                                 
                         make_csv.print(label_to_use, sensor_value)
                     except Exception:
-                        pass # 書き込みエラーでシステムを止めない
+                        pass
                 
                 return sensor_value
         else:
@@ -112,17 +94,17 @@ def abnormal_check(sensor_name, value_name, read_func, ERROR_FLAG=True, max_retr
         # 異常値だった場合
         if is_abnormal:
             if attempt < max_retries:
-                print(f"[{sensor_name} {value_name}] 異常値検知 (値: {sensor_value})。{retry_delay}秒後に再取得します (リトライ {attempt+1}/{max_retries})...")
+                print(f"[{value_name}] 異常値検知 (値: {sensor_value})。{retry_delay}秒後に再取得します (リトライ {attempt+1}/{max_retries})...")
                 time.sleep(retry_delay)
             else:
                 filtered_value = None
                 try:
                     if make_csv:
-                        make_csv.print("msg", f"ijochi detected: {sensor_name} {value_name} out of range")
+                        make_csv.print("msg", f"ijochi detected: {value_name} out of range")
                     if ERROR_FLAG:
-                        raise ValueError(f"{sensor_name} {value_name} is abnormal - {sensor_value}")
+                        raise ValueError(f"{value_name} is abnormal - {sensor_value}")
                     else:
-                        print(f"{sensor_name} {value_name} is abnormal: {sensor_value}")
+                        print(f"[{value_name}] is abnormal: {sensor_value}")
                 except ValueError as e:
                     print(f"Failed to pass value check: {e}")
                 except Exception as e:
