@@ -88,7 +88,7 @@ def setup_sensors():
     return bno, cam, bme, qnh, motor_ok, gpio_ok
 
 # ==========================================
-# BNO055によるフィードバック旋回関数
+# BNO055による自認フィードバック旋回関数
 # ==========================================
 def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
     """
