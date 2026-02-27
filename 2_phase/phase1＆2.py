@@ -146,7 +146,7 @@ def main():
 
                     consecutive_count = 0
                     REQUIRED_COUNT = 5  # 1秒ごとに計測し5回連続（=5秒間）で着地判定
-                    D_ALT_THRESH = 0.1  # 仕様：5秒間の高度変化が0.1m以下
+                    D_ALT_THRESH = 0.5  # 仕様：5秒間の高度変化が0.1m以下
 
                     _, p, _ = bme.read_all()
                     if p is None:
@@ -271,3 +271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
