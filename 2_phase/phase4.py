@@ -113,6 +113,59 @@ def main():
             try:
                 if phase == 4:
                     #ここに近距離フェーズの処理
+                    print("\n--- フェーズ4: 近距離フェーズ（カメラ誘導） ---")
+                    if not cam:
+                        print("カメラが認識されていません。フェーズ4をスキップします。")
+                    else:
+                        is_inverted = False
+                        
+                        while phase == 4:
+                            
+                            if bno:
+                                gravity = bno.gravity()
+                                is_inverted = (gravity is not None and gravity[2] < -2.0)
+
+                            #カメラで画像取得＆推論
+                            frame, x_pct, order, area = cam.capture_and_detect()
+                            is_stacked = 0
+
+                            #YOLOの指令に基づく行動
+                            if order == 4:
+                                print(f"ターゲットに超接近（面積: {area}）！ゴールと判定します！")
+                                if motor_ok:
+                                    md.stop()
+                                
+                                break 
+                                
+                            elif order == 0:
+                                print("ターゲットを見失いました。探索のため右回転します。")
+                                if motor_ok:
+                                    md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                    
+                            elif order == 1:
+                                print("ターゲットは正面です。直進します")
+                                if motor_ok:
+                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                    
+                            elif order == 2:
+                                print("ターゲットが右です。右に旋回してから前進しmあす")
+                                if motor_ok:
+                                    md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                    
+                            elif order == 3:
+                                print("⬅ーゲットが左です。左に旋回してから前進します")
+                                if motor_ok:
+                                    md.move('a', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+
+                            #スタック判定
+                            if motor_ok and is_stacked:
+                                print("スタックを検知すました。リカバリー行動を開始します。")
+                                md.check_stuck(is_stacked, is_inverted=is_inverted)
+                                
+                            time.sleep(0.1)
+                    
                     phase = 5
 
                 time.sleep(0.1)
