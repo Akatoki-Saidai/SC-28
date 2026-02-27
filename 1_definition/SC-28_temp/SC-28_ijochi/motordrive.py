@@ -223,53 +223,48 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
         # スタック検知条件: 2秒以上の移動 かつ センサーあり かつ 検知有効
         if duration >= 2 and bno is not None and enable_stack_check:
             start_t = time.time()
+            stuck_start_time = None
+            STUCK_DURATION_THRESHOLD = 1.5 # 1.5秒間連続で動きがなければスタックと判定
             
             while time.time() - start_t < remaining_time:
-                # --- スタック検知 (ご要望により既存ロジックを維持) ---
-                stack_detected = True
+                is_moving = False
                 
-                # センサーチェック (5回サンプリング)
-                for _ in range(5):
-                    gyro = bno.gyroscope()
-                    # センサーエラー時は検知しない
-                    if gyro is None:
-                        stack_detected = False
-                        break
-                    
-                    # 異常値フィルタ
-                    # ijochi側が関数を受け取るようになった仕様に合わせる
-                    gyro = ijochi.abnormal_check("bno", "gyro", lambda: gyro, ERROR_FLAG=False)
-                    if gyro is None:
-                        stack_detected = False
-                        break
+                # センサーからデータを取得
+                gyro = bno.gyroscope()
+                lin_accel = bno.linear_acceleration() # 重力を除いた線形加速度を取得（空転対策）
+                
+                if gyro is not None and lin_accel is not None:
+                    # ijochiの引数からセンサー名("bno"など)を削除
+                    gyro = ijochi.abnormal_check("gyro", gyro, ERROR_FLAG=False)
+                    lin_accel = ijochi.abnormal_check("lin_accel", lin_accel, ERROR_FLAG=False)
 
-                    # 判定ロジック (厳しい判定のまま維持)
-                    if direction in ['a', 'd', 'q', 'e']:
-                        # 旋回中: Z軸ジャイロが動いているべき
-                        if abs(gyro[2]) > 0.4: # 閾値
-                            stack_detected = False
-                            break
-                    else:
-                        # 直進中: 機体全体が揺れたり動いているべき
-                        if np.linalg.norm(gyro) > 0.4:
-                            stack_detected = False
-                            break
-                    
-                    time.sleep(0.05) # サンプリング間隔
+                    if gyro is not None and lin_accel is not None:
+                        if direction in ['a', 'd', 'q', 'e']:
+                            # 旋回中: 土や草の抵抗でゆっくり回ることを考慮し、閾値を0.2に下げる
+                            if abs(gyro[2]) > 0.2: 
+                                is_moving = True
+                        else:
+                            # 直進・後退中: 
+                            # 線形加速度(実際の進行) または ジャイロ(機体の揺れ) のどちらかが出ていれば動いていると判定
+                            # 完全に空転している場合は線形加速度が落ちるため、スタックと判定しやすくなる
+                            if np.linalg.norm(lin_accel) > 0.5 or np.linalg.norm(gyro) > 0.6:
+                                is_moving = True
 
-                # スタック確定時の処理
-                if stack_detected:
-                    print("Stack Detected!")
-                    if make_csv:
-                        try: make_csv.print('warning', 'stacking detected')
-                        except Exception: pass
-                    is_stacked = 1
-                    break 
+                if is_moving:
+                    # 動いている（または揺れている）と判定されたので、スタック状態のカウントをリセット
+                    stuck_start_time = None
+                else:
+                    # 動きが検知できなかった場合、スタックのカウントを開始
+                    if stuck_start_time is None:
+                        stuck_start_time = time.time()
+                    elif time.time() - stuck_start_time >= STUCK_DURATION_THRESHOLD:
+                        # 1.5秒間、継続して動きが検知できなかったらスタック確定
+                        print("Stack Detected! (Off-road logic)")
+                        make_csv.print('warning', 'stacking detected')
+                        is_stacked = 1
+                        break 
 
-                # 待機 (残り時間 or 0.1秒)
-                elapsed = time.time() - start_t
-                sleep_t = max(0, min(0.1, remaining_time - elapsed))
-                time.sleep(sleep_t)
+                time.sleep(0.05) # 0.05秒間隔で監視を継続
         else:
             # 監視なしの単純待機
             time.sleep(remaining_time)
