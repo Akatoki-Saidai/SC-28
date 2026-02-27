@@ -214,6 +214,13 @@ def main():
                     print(f"Error in falling phase: {e}")
                     time.sleep(1)
 
+            # ==========================
+            # 終了フェーズ（★最小修正：phase=3で無限ループしないようにbreak）
+            # ==========================
+            elif phase == 3:
+                print("phase=3 到達 → ループ終了")
+                break
+
             time.sleep(0.1)
 
     except KeyboardInterrupt:
@@ -264,4 +271,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
