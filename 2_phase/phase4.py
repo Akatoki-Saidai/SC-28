@@ -118,53 +118,108 @@ def main():
                         print("カメラが認識されていません。フェーズ4をスキップします。")
                     else:
                         is_inverted = False
+                        lost_count = 0 #ターゲットを見失った連続回数をカウントする変数
                         
                         while phase == 4:
-                            
-                            if bno:
-                                gravity = bno.gravity()
-                                is_inverted = (gravity is not None and gravity[2] < -2.0)
-
-                            #カメラで画像取得＆推論
-                            frame, x_pct, order, area = cam.capture_and_detect()
-                            is_stacked = 0
-
-                            #YOLOの指令に基づく行動
-                            if order == 4:
-                                print(f"ターゲットに超接近（面積: {area}）！ゴールと判定します！")
-                                if motor_ok:
-                                    md.stop()
-                                
-                                break 
-                                
-                            elif order == 0:
-                                print("ターゲットを見失いました。探索のため右回転します。")
-                                if motor_ok:
-                                    md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                            try:
+                                #裏返り判定
+                                if bno:
+                                    gravity = bno.gravity()
+                                    is_inverted = (gravity is not None and gravity[2] < -2.0)
+    
+                                #カメラで画像取得＆推論
+                                frame, x_pct, order, area = cam.capture_and_detect()
+                                is_stacked = 0
+    
+                                #YOLOの指令に基づく行動
+                                if order == 4:
+                                    print(f"ターゲットに超接近（面積: {area}）。ゴールと判定します！")
+                                    if motor_ok:
+                                        md.stop()
+                                    break 
                                     
-                            elif order == 1:
-                                print("ターゲットは正面です。直進します")
-                                if motor_ok:
-                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                elif order == 0:
+                                    print("ターゲットを見失いました。探索のため右回転します。")
+                                    lost_count += 1
+                                    if motor_ok:
+                                        md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                        
+                                    #10回連続（約5秒間）見失ったら、GPSで現在地を確認する
+                                    if lost_count >= 10:
+                                        print("長時間ターゲットが見つかりません。現在地をGPSで確認します...")
+                                        if motor_ok:
+                                           md.stop()
+                                                                
+                                        curr_lat, curr_lon = idokeido()
+                                        if curr_lat is not None and curr_lon is not None:
+                                            d, _ = calculate_distance_and_angle(
+                                                curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON
+                                            )
+                                            print(f"ゴールまでの距離: {d:.2f}m")
+                                                                
+                                            if d <= 10.0:
+                                                print("10m圏内を維持しています。カウントをリセットし、探索を継続します。")
+                                                lost_count = 0 # まだ近くにいるので、もう一度探してみる
+                                            else:
+                                                print("10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                                phase = 3
+                                                break
+                                        else:
+                                            print("GPS取得失敗。安全のため探索を継続します。")
+                                            lost_count = 0 # 取得できなかった場合はとりあえず探索継続  
+                                        
+                                elif order == 1:
+                                    print("ターゲットは正面です。直進します。")
+                                    if motor_ok:
+                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                        
+                                elif order == 2:
+                                    print("ターゲットが右です。右に旋回してから前進します。")
+                                    if motor_ok:
+                                        md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                        
+                                elif order == 3:
+                                    print("ターゲットが左です。左に旋回してから前進します。")
+                                    if motor_ok:
+                                        md.move('a', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+    
+                                # ④ スタック判定とリカバリー（motordriveにお任せ）
+                                if motor_ok and is_stacked:
+                                    print("スタックを検知しました。リカバリー行動を開始します。")
+                                    md.check_stuck(is_stacked, is_inverted=is_inverted)
                                     
-                            elif order == 2:
-                                print("ターゲットが右です。右に旋回してから前進しmあす")
+                                time.sleep(0.1)
+    
+                            except Exception as e:
+                                # ＝＝＝ ここからが追加したGPS安全装置 ＝＝＝
+                                print(f"カメラ等でエラー発生: {e}")
                                 if motor_ok:
-                                    md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
-                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
-                                    
-                            elif order == 3:
-                                print("⬅ーゲットが左です。左に旋回してから前進します")
-                                if motor_ok:
-                                    md.move('a', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
-                                    is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
-
-                            #スタック判定
-                            if motor_ok and is_stacked:
-                                print("スタックを検知すました。リカバリー行動を開始します。")
-                                md.check_stuck(is_stacked, is_inverted=is_inverted)
-                                
-                            time.sleep(0.1)
+                                    md.stop() # 暴走防止のため一旦停止
+    
+                                print("GPSで現在地を確認し、10m圏内かチェックします。")
+                                curr_lat, curr_lon = idokeido()
+    
+                                if curr_lat is not None and curr_lon is not None:
+                                    # 距離を計算（方位計算用の過去座標は不要なので現在地をダミーで入れています）
+                                    d, _ = calculate_distance_and_angle(
+                                        curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON
+                                    )
+                                    print(f"ゴールまでの距離: {d:.2f}m")
+    
+                                    if d <= 10.0:
+                                        print("10m圏内を維持しています。近距離フェーズを継続します。")
+                                        time.sleep(0.1)
+                                        continue # ループの先頭に戻ってカメラ再取得
+                                    else:
+                                        print("10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                        phase = 3
+                                        break # 近距離のループを抜けて、フェーズ3へ戻る
+                                else:
+                                    print("GPSの取得にも失敗しました。安全のため近距離フェーズを維持してリトライします。")
+                                    time.sleep(0.1)
+                                    continue
                     
                     phase = 5
 
