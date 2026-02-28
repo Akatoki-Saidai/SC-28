@@ -131,25 +131,41 @@ def main():
             # ==========================
             elif phase == 2:
                 try:
+                    # ① bme / gpio_ok のガード：continueではなくphase移行してbreakしない
+                    if not bme:
+                        print("BME280が使えないため落下フェーズをスキップします")
+                        phase = 3
+                        continue
+                    if not gpio_ok:
+                        print("GPIOが使えないためニクロム線を安全に駆動できません")
+                        phase = 3
+                        continue
+
                     FALL_TIMEOUT_SEC = 180.0
                     fall_start_time = time.time()
 
                     consecutive_count = 0
-                    REQUIRED_COUNT = 5
-                    D_ALT_THRESH = 0.5
+                    REQUIRED_COUNT = 5  # 1秒ごとに計測し5回連続（=5秒間）で着地判定
+                    D_ALT_THRESH = 0.5  # 仕様：5秒間の高度変化が0.1m以下
 
                     _, p, _ = bme.read_all()
                     if p is None:
-                        continue
+                        print("初期高度の取得に失敗しました。再試行します。")
+                        time.sleep(0.5)
+                        continue  # phase==2のままwhile Trueの先頭へ戻り再試行
 
                     alt_prev = bme.altitude(p, qnh=qnh)
                     if alt_prev is None:
-                        continue
+                        print("初期高度の計算に失敗しました。再試行します。")
+                        time.sleep(0.5)
+                        continue  # 同上
 
                     print(f"fall start alt={alt_prev:.3f} m")
 
                     while True:
 
+                        # ② タイムアウトチェックをループ先頭で必ず実行
+                        #    （Noneが続いてもタイムアウトで必ず抜けられる）
                         if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
                             print("3分経過 → 強制分離")
                             break
@@ -158,11 +174,13 @@ def main():
 
                         _, p, _ = bme.read_all()
                         if p is None:
-                            continue
+                            print("BME280: read_all が None でした。スキップします。")
+                            continue  # タイムアウトチェックは次ループで実行される
 
                         alt_now = bme.altitude(p, qnh=qnh)
                         if alt_now is None:
-                            continue
+                            print("BME280: altitude が None でした。スキップします。")
+                            continue  # 同上
 
                         d_alt = abs(alt_now - alt_prev)
 
@@ -183,6 +201,7 @@ def main():
 
                         alt_prev = alt_now
 
+                    # ニクロム線作動（パラシュート分離）
                     print("start nichrome wire")
                     GPIO.output(NICHROME_PIN, 1)
                     time.sleep(15)
@@ -194,6 +213,13 @@ def main():
                 except Exception as e:
                     print(f"Error in falling phase: {e}")
                     time.sleep(1)
+
+            # ==========================
+            # 終了フェーズ（★最小修正：phase=3で無限ループしないようにbreak）
+            # ==========================
+            elif phase == 3:
+                print("phase=3 到達 → ループ終了")
+                break
 
             time.sleep(0.1)
 
@@ -245,3 +271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
