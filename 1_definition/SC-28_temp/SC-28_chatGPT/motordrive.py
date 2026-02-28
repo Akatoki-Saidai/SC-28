@@ -160,8 +160,8 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
     def set_values(d, p):
         if d == 'w':   mr, ml = p, p
         elif d == 's': mr, ml = -p, -p
-        elif d == 'a': mr, ml = p, -p  # 左旋回
-        elif d == 'd': mr, ml = -p, p  # 右旋回
+        elif d == 'a': mr, ml = -p, p  # 左旋回
+        elif d == 'd': mr, ml = p, -p  # 右旋回
         elif d == 'q': mr, ml = 0, p   # その場左
         elif d == 'e': mr, ml = p, 0   # その場右
         else: return False
