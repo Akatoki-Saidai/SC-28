@@ -21,7 +21,24 @@ def main():
         print(f"モーターセットアップエラー: {e}")
         return
 
-    # 許可する方向コマンドのリスト（元のコードのMode 5を参考）
+    # --- 追加: is_inverted の設定 ---
+    print("\n" + "-" * 40)
+    is_inverted = False
+    while True:
+        inv_input = input("機体は反転していますか？ (y/n): ").strip().lower()
+        if inv_input in ['y', 'yes']:
+            is_inverted = True
+            print(" >> 反転モード (is_inverted=True) で開始します。")
+            break
+        elif inv_input in ['n', 'no']:
+            is_inverted = False
+            print(" >> 通常モード (is_inverted=False) で開始します。")
+            break
+        else:
+            print("【警告】 'y' か 'n' で答えてください。")
+    # --------------------------------
+
+    # 許可する方向コマンドのリスト
     valid_commands = ['w', 'a', 's', 'd', 'q', 'e']
 
     try:
@@ -51,13 +68,13 @@ def main():
                 continue
                 
             # 3. モーターの駆動
-            print(f" >>> [{cmd}] 方向に {duration} 秒間動かします...")
+            inv_str = "反転" if is_inverted else "通常"
+            print(f" >>> [{cmd}] 方向に {duration} 秒間動かします... (状態: {inv_str})")
+            
             try:
-                # power(出力)は0.7で固定していますが、必要に応じて変更してください
-                md.move(cmd, power=0.7, duration=duration, is_inverted=False, enable_stack_check=False)
+                # 最初に設定した is_inverted の状態を渡す
+                md.move(cmd, power=1.0, duration=duration, is_inverted=is_inverted, enable_stack_check=False)
                 
-                # md.moveの仕様によっては非同期で動く可能性があるため、
-                # 指定時間待機した後に確実に停止コマンドを送る安全策をとっています。
                 time.sleep(duration) 
                 md.stop()
                 
@@ -69,7 +86,6 @@ def main():
     except KeyboardInterrupt:
         print("\n[Ctrl+C] 中断されました。")
     finally:
-        # プログラム終了時は必ずモーターを停止してクリーンアップする
         print("\n終了処理中...")
         try:
             md.stop()
