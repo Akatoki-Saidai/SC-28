@@ -12,4 +12,5 @@
     camera.py       取得した値を自動でcsvに保存するように
     gps.py          計算した値を自動でcsvに保存するように
     mortordrive.py  モータの動作を自動でcsvに保存するように
+                    スタック検知の条件変更
     make_csv.py     claudeが添削(SDカードへの負荷を軽減)
