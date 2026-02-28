@@ -230,7 +230,8 @@ def main():
     GOAL_LON = 139.000000
 
     bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
-    cam = setup_camera()
+    cam = None
+    
 
     print("\n=== デバイス接続状況 ===")
     print(f"* BNO055 : {'OK' if bno else 'Skip'}")
@@ -494,6 +495,9 @@ def main():
                     
                     #ここに近距離フェーズの処理
                     print("\n--- フェーズ4: 近距離フェーズ（カメラ誘導） ---")
+                    if not cam:
+                        cam = setup_camera()
+
                     if not cam:
                         print("カメラが認識されていません。フェーズ4をスキップします。")
                     else:
