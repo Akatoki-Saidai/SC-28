@@ -76,9 +76,9 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
     """
     現在の向いている方向から、指定した角度(initial_angle_diff)だけ旋回する。
     """
-    OMEGA_DEG_PER_SEC = 90.0  # 1秒あたりの旋回角度
-    MIN_DURATION = 0.3        # トルク不足を防ぐための最低駆動時間
-    MAX_ATTEMPTS = 3          # 延々と補正し続けるのを防ぐ最大試行回数
+    OMEGA_DEG_PER_SEC = 90.0  
+    MIN_DURATION = 0.3        
+    MAX_ATTEMPTS = 3          
 
     if not bno or not motor_ok:
         turn_time = min(abs(initial_angle_diff) / OMEGA_DEG_PER_SEC, 5.0)
@@ -89,8 +89,14 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
     euler = bno.euler()
     if euler is None:
         return
-    start_yaw = euler[0]
     
+    # 【修正①】初期角度の取得時に逆さ補正を入れる
+    start_yaw = euler[0]
+    if is_inverted:
+        start_yaw = (360.0 - start_yaw) % 360.0 # 回転方向を地面基準に合わせる
+    
+    # ※前回お伝えした「GPSとBNO055の符号のズレ」の実機確認次第では、
+    # ここが (start_yaw - initial_angle_diff) になる可能性があります。
     target_yaw = (start_yaw + initial_angle_diff) % 360.0
     print(f"🔄 フィードバック旋回開始: 現在Yaw={start_yaw:.1f}度, 目標Yaw={target_yaw:.1f}度")
 
@@ -98,7 +104,11 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
         curr_euler = bno.euler()
         if curr_euler is None:
             break
+            
+        # 【修正②】現在の角度の取得時にも逆さ補正を入れる
         curr_yaw = curr_euler[0]
+        if is_inverted:
+            curr_yaw = (360.0 - curr_yaw) % 360.0
         
         diff = (target_yaw - curr_yaw + 180) % 360 - 180
         
@@ -107,18 +117,16 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
             break
             
         turn_time = abs(diff) / OMEGA_DEG_PER_SEC
-        
         if turn_time < MIN_DURATION:
             turn_time = MIN_DURATION
-            
         turn_time = min(turn_time, 4.0)
         
         cmd = 'd' if diff > 0 else 'a'
         print(f"   -> 補正 {attempt+1}/{MAX_ATTEMPTS}: 残り {diff:.1f}度, {turn_time:.2f}秒駆動")
         
+        # ここはis_invertedを渡して物理的なモーター反転を任せる
         md.move(cmd, power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
         time.sleep(0.5)
-
 
 
 # ==========================================
@@ -500,8 +508,11 @@ def main():
                                     is_inverted = (gravity is not None and gravity[2] < -2.0)
     
                                 #カメラで画像取得＆推論
-                                frame, x_pct, order, area = cam.capture_and_detect()
+                                frame, x_pct, order, area = cam.capture_and_detect(is_inverted=is_inverted)
                                 is_stacked = 0
+
+                                # ★追加：取得した画像をログとして保存する
+                                last_image_save_time = save_frame_if_needed(frame, last_image_save_time)
     
                                 #YOLOの指令に基づく行動
                                 if order == 4:
@@ -609,6 +620,7 @@ def main():
 
             except Exception as e:
                 print(f"\n予期せぬエラーが発生しました: {e}")
+                time.sleep(2.0)
 
 
 
