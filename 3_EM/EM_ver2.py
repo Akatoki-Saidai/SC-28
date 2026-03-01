@@ -339,9 +339,10 @@ def main():
 
                         # --- 落下判定ループ ---
                         while True:
-                            if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
-                                print("3分経過 → 強制分離")
-                                break
+                            #投下試験用に削除
+                            #if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
+                            #    print("3分経過 → 強制分離")
+                            #    break
 
                             time.sleep(1.0)
 
