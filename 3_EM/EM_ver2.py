@@ -7,6 +7,7 @@ import math
 import numpy as np
 import datetime
 import RPi.GPIO as GPIO
+import ijochi
 
 # ★ make_csvをインポート (安全な読み込み)
 try:
@@ -268,17 +269,19 @@ def main():
                             make_csv.print("phase","2")
                             continue
 
-                        _, p, _ = bme.read_all()
+                        # ★ 1. ijochiで気圧だけを安全に取得（異常値チェック＆自動CSV保存）
+                        p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
                         if p is None:
                             time.sleep(0.5)
                             continue
 
+                        # ★ 2. 正常な気圧データをもとに、高度を計算
                         alt = bme.altitude(p, qnh=qnh)
                         if alt is None:
                             time.sleep(0.5)
                             continue
-
-                        make_csv.print("press", p)
+                        
+                        # ★ 3. 高度はijochiを通らないため手動でCSV保存
                         make_csv.print("alt", alt)
 
                         print(f"[待機] alt={alt:.3f} m")
@@ -295,9 +298,9 @@ def main():
                         print(f"Error in wait phase: {e}")
                         make_csv.print("error",f"Error in wait phase: {e}")
                         time.sleep(1)
+
                 elif phase == 2:
                     try:
-                        # ① bme / gpio_ok のガード：continueではなくphase移行してbreakしない
                         if not bme:
                             print("BME280が使えないため落下フェーズをスキップします")
                             make_csv.print("error","BME280が使えないため落下フェーズをスキップします")
@@ -313,55 +316,61 @@ def main():
                         fall_start_time = time.time()
 
                         consecutive_count = 0
-                        REQUIRED_COUNT = 5  # 1秒ごとに計測し5回連続（=5秒間）で着地判定
-                        D_ALT_THRESH = 0.5  # 仕様：5秒間の高度変化が0.1m以下
+                        REQUIRED_COUNT = 5  
+                        D_ALT_THRESH = 0.5  
 
-                        _, p, _ = bme.read_all()
+                        # --- 初期気圧・高度の取得 ---
+                        p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
                         if p is None:
-                            print("初期高度の取得に失敗しました。再試行します。")
-                            make_csv.print("msg","初期高度の取得に失敗しました。再試行します。")
+                            print("初期気圧の取得に失敗しました。再試行します。")
+                            make_csv.print("msg","初期気圧の取得に失敗しました。再試行します。")
                             time.sleep(0.5)
-                            continue  # phase==2のままwhile Trueの先頭へ戻り再試行
+                            continue
 
                         alt_prev = bme.altitude(p, qnh=qnh)
                         if alt_prev is None:
                             print("初期高度の計算に失敗しました。再試行します。")
-                            make_csv.print("初期高度の計算に失敗しました。再試行します。")
+                            make_csv.print("msg","初期高度の計算に失敗しました。再試行します。")
                             time.sleep(0.5)
-                            continue  # 同上
+                            continue
 
+                        make_csv.print("alt", alt_prev)
                         print(f"fall start alt={alt_prev:.3f} m")
 
+                        # --- 落下判定ループ ---
                         while True:
-
-                            # ② タイムアウトチェックをループ先頭で必ず実行
-                            #    （Noneが続いてもタイムアウトで必ず抜けられる）
                             if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
                                 print("3分経過 → 強制分離")
                                 break
 
                             time.sleep(1.0)
 
-                            _, p, _ = bme.read_all()
+                            # 落下中もijochiで気圧を取得
+                            p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
                             if p is None:
-                                print("BME280: read_all が None でした。スキップします。")
-                                continue  # タイムアウトチェックは次ループで実行される
+                                print("BME280: 気圧の取得失敗(ijochi)。スキップします。")
+                                continue
 
                             alt_now = bme.altitude(p, qnh=qnh)
                             if alt_now is None:
-                                print("BME280: altitude が None でした。スキップします。")
-                                continue  # 同上
+                                print("BME280: 高度の計算失敗。スキップします。")
+                                continue
 
+                            make_csv.print("alt", alt_now)
                             d_alt = abs(alt_now - alt_prev)
-
-                            make_csv.print("press", p)
-                            make_csv.print("alt", alt)
 
                             print(
                                 f"alt={alt_now:.3f} m, "
                                 f"Δalt(1s)={d_alt:.3f} m "
                                 f"({consecutive_count}/{REQUIRED_COUNT})"
                             )
+
+                            make_csv.print("msg", f"d_alt:{d_alt:.3f}, count:{consecutive_count}")
+
+                            if bno:
+                                euler = bno.euler()
+                                if euler is not None:
+                                    make_csv.print("euler", euler)
 
                             if alt_now <= 7.0 and d_alt <= D_ALT_THRESH:
                                 consecutive_count += 1
@@ -390,7 +399,6 @@ def main():
                     except Exception as e:
                         print(f"Error in falling phase: {e}")
                         time.sleep(1)
-
                 elif phase == 3:
                     
                     print("\n--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
