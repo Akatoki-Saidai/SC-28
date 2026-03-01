@@ -295,6 +295,7 @@ def main():
                             else:
                                 time.sleep(1.0)
                         else:
+                            launch_count = 0
                             time.sleep(1.0)
 
                     except Exception as e:
