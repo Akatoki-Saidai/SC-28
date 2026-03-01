@@ -8,6 +8,13 @@ import numpy as np
 import datetime
 import RPi.GPIO as GPIO
 
+# ★ make_csvをインポート (安全な読み込み)
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
 # ==========================================
 # ピン配置設定
 # ==========================================
@@ -248,6 +255,8 @@ def main():
     last_image_save_time = 0
 
     phase = 1
+    make_csv.print("msg","start phase1")
+    make_csv.print("phase","1")
 
     try:
         while True:
@@ -256,6 +265,7 @@ def main():
                     try:
                         if not bme:
                             phase = 2
+                            make_csv.print("phase","2")
                             continue
 
                         _, p, _ = bme.read_all()
@@ -268,26 +278,34 @@ def main():
                             time.sleep(0.5)
                             continue
 
+                        make_csv.print("press", p)
+                        make_csv.print("alt", alt)
+
                         print(f"[待機] alt={alt:.3f} m")
 
                         if alt >= 10.0:
                             print("Go to falling phase")
+                            make_csv.print("msg","Go to falling phase")
+                            make_csv.print("phase","2")
                             phase = 2
                         else:
                             time.sleep(1.0)
 
                     except Exception as e:
                         print(f"Error in wait phase: {e}")
+                        make_csv.print("error",f"Error in wait phase: {e}")
                         time.sleep(1)
                 elif phase == 2:
                     try:
                         # ① bme / gpio_ok のガード：continueではなくphase移行してbreakしない
                         if not bme:
                             print("BME280が使えないため落下フェーズをスキップします")
+                            make_csv.print("error","BME280が使えないため落下フェーズをスキップします")
                             phase = 3
                             continue
                         if not gpio_ok:
                             print("GPIOが使えないためニクロム線を安全に駆動できません")
+                            make_csv.print("error","GPIOが使えないためニクロム線を安全に駆動できません")
                             phase = 3
                             continue
 
@@ -301,12 +319,14 @@ def main():
                         _, p, _ = bme.read_all()
                         if p is None:
                             print("初期高度の取得に失敗しました。再試行します。")
+                            make_csv.print("msg","初期高度の取得に失敗しました。再試行します。")
                             time.sleep(0.5)
                             continue  # phase==2のままwhile Trueの先頭へ戻り再試行
 
                         alt_prev = bme.altitude(p, qnh=qnh)
                         if alt_prev is None:
                             print("初期高度の計算に失敗しました。再試行します。")
+                            make_csv.print("初期高度の計算に失敗しました。再試行します。")
                             time.sleep(0.5)
                             continue  # 同上
 
@@ -334,38 +354,50 @@ def main():
 
                             d_alt = abs(alt_now - alt_prev)
 
+                            make_csv.print("press", p)
+                            make_csv.print("alt", alt)
+
                             print(
                                 f"alt={alt_now:.3f} m, "
                                 f"Δalt(1s)={d_alt:.3f} m "
                                 f"({consecutive_count}/{REQUIRED_COUNT})"
                             )
 
-                            if alt_now <= 10.0 and d_alt <= D_ALT_THRESH:
+                            if alt_now <= 7.0 and d_alt <= D_ALT_THRESH:
                                 consecutive_count += 1
                             else:
                                 consecutive_count = 0
 
                             if consecutive_count >= REQUIRED_COUNT:
                                 print("Landing detected")
+                                make_csv.print("msg","Landing detected")
                                 break
 
                             alt_prev = alt_now
 
                         # ニクロム線作動（パラシュート分離）
                         print("start nichrome wire")
+                        make_csv.print("msg","start nichrome wire")
                         GPIO.output(NICHROME_PIN, 1)
                         time.sleep(15)
                         GPIO.output(NICHROME_PIN, 0)
                         print("finish nichrome wire")
+                        make_csv.print("msg","finish nichrome wire")
 
                         phase = 3
+                        make_csv.print("phase","3")
 
                     except Exception as e:
                         print(f"Error in falling phase: {e}")
                         time.sleep(1)
 
                 elif phase == 3:
+                    
                     print("\n--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
+                    #投下試験用
+                    phase = 5
+                    make_csv.print("phase","5")
+                    continue
                     
                     # --- 【準備】機体の上下判定 ---
                     is_inverted = False
