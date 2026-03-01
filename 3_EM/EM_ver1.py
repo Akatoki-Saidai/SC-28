@@ -258,6 +258,8 @@ def main():
     make_csv.print("msg","start phase1")
     make_csv.print("phase","1")
 
+    launch_count = 0
+
     try:
         while True:
             try:
@@ -284,10 +286,14 @@ def main():
                         print(f"[待機] alt={alt:.3f} m")
 
                         if alt >= 10.0:
-                            print("Go to falling phase")
-                            make_csv.print("msg","Go to falling phase")
-                            make_csv.print("phase","2")
-                            phase = 2
+                            launch_count += 1
+                            if launch_count >= 5:
+                                print("5回連続で10m以上を検知しました。Go to falling phase")
+                                make_csv.print("msg","Go to falling phase")
+                                make_csv.print("phase","2")
+                                phase = 2
+                            else:
+                                time.sleep(1.0)
                         else:
                             time.sleep(1.0)
 
