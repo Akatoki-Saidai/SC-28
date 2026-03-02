@@ -119,6 +119,7 @@ class Camera:
         except Exception:
             return None
 
+
     def capture_and_detect(self, is_inverted=False):
             """
             画像を取得し、コーン位置を判定する
@@ -137,10 +138,8 @@ class Camera:
                 # 1. フレーム取得 & 前処理
                 frame_raw = self.picam2.capture_array()
                 
-                # 【重要修正】カメラが逆付けされているため：
-                # 通常走行時(False)はカメラが逆さま -> 180度回転させて正立にする
-                # 逆さ走行時(True)はカメラが偶然真っ直ぐ -> 回転させない
-                if not is_inverted:
+                # 【修正】機体が裏返っている時(True)だけ回転させて正立にする
+                if is_inverted:
                     frame = cv2.rotate(frame_raw, cv2.ROTATE_180)
                 else:
                     frame = frame_raw
@@ -193,8 +192,6 @@ class Camera:
                     target_x_percent = (red_center_x - frame_center_x) / float(width)
                     
                     # ★モーター指令の逆さ補正
-                    # 画像は常に正立（現実と同じ左右）に補正されているため、
-                    # 機体が裏返っている時だけ、車輪へのステアリング指令を反転させます。
                     if is_inverted:
                         target_x_percent = -target_x_percent
 
