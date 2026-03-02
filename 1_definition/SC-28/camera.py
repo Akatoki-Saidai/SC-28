@@ -138,8 +138,8 @@ class Camera:
                 # 1. フレーム取得 & 前処理
                 frame_raw = self.picam2.capture_array()
                 
-                # 【修正】機体が裏返っている時(True)だけ回転させて正立にする
-                if is_inverted:
+                # 通常時(False)は回転させて正立へ、逆さ走行時(True)はそのまま
+                if not is_inverted:
                     frame = cv2.rotate(frame_raw, cv2.ROTATE_180)
                 else:
                     frame = frame_raw
@@ -189,12 +189,8 @@ class Camera:
                                 (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]), (0, 0, 255), 2)
 
                 elif red_percent > 0.05:
+                    # 余計な反転処理を削除
                     target_x_percent = (red_center_x - frame_center_x) / float(width)
-                    
-                    # ★モーター指令の逆さ補正
-                    if is_inverted:
-                        target_x_percent = -target_x_percent
-
                     target_x_percent = max(-0.5, min(0.5, target_x_percent))
                     camera_order = self._decide_direction(target_x_percent)
                     cv2.rectangle(frame, (red_rect[0], red_rect[1]), 
@@ -231,12 +227,8 @@ class Camera:
                                         yolo_center_x = (xmin + xmax) // 2
                                         yolo_center_y = (ymin + ymax) // 2
 
+                                        # 余計な反転処理を削除
                                         target_x_percent = (yolo_center_x - frame_center_x) / float(width)
-                                        
-                                        # ★モーター指令の逆さ補正
-                                        if is_inverted:
-                                            target_x_percent = -target_x_percent
-
                                         target_x_percent = max(-0.5, min(0.5, target_x_percent))
                                         camera_order = self._decide_direction(target_x_percent)
                                         yolo_found = True
@@ -251,12 +243,8 @@ class Camera:
                             if self.debug: print(f"YOLO Error: {e}")
 
                     if (not yolo_found) and (red_percent > 0.001):
+                        # 余計な反転処理を削除
                         target_x_percent = (red_center_x - frame_center_x) / float(width)
-                        
-                        # ★モーター指令の逆さ補正
-                        if is_inverted:
-                            target_x_percent = -target_x_percent
-
                         target_x_percent = max(-0.5, min(0.5, target_x_percent))
                         camera_order = self._decide_direction(target_x_percent)
                         cv2.rectangle(frame, (red_rect[0], red_rect[1]), 
