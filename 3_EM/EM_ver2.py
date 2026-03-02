@@ -412,10 +412,7 @@ def main():
                 elif phase == 3:
                     
                     print("\n--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
-                    #投下試験用
-                    phase = 5
-                    make_csv.print("phase","5")
-                    continue
+
                     
                     # --- 【準備】機体の上下判定 ---
                     is_inverted = False
