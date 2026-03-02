@@ -127,7 +127,6 @@ class Camera:
             Return:
                 frame, target_x_percent, order, red_area
             """
-            # カメラ未初期化時のガード
             if self.picam2 is None:
                 print("Camera is not initialized!")
                 return np.zeros((480, 640, 3), dtype=np.uint8), 0.0, 0, 0
@@ -138,9 +137,10 @@ class Camera:
                 # 1. フレーム取得 & 前処理
                 frame_raw = self.picam2.capture_array()
                 
-                # 【変更】機体がひっくり返っている時(is_inverted=True)だけ180度回転。
-                # カメラを逆付けしたことで、通常走行時はすでに正立画像になっているため。
-                if is_inverted:
+                # 【重要修正】カメラが逆付けされているため：
+                # 通常走行時(False)はカメラが逆さま -> 180度回転させて正立にする
+                # 逆さ走行時(True)はカメラが偶然真っ直ぐ -> 回転させない
+                if not is_inverted:
                     frame = cv2.rotate(frame_raw, cv2.ROTATE_180)
                 else:
                     frame = frame_raw
@@ -169,7 +169,6 @@ class Camera:
                     biggest_contour = max(contours, key=cv2.contourArea)
                     area_tmp = cv2.contourArea(biggest_contour)
 
-                    # ノイズ除去
                     if area_tmp > 20:
                         red_area = float(area_tmp)
                         red_rect = cv2.boundingRect(biggest_contour)
@@ -180,53 +179,34 @@ class Camera:
 
                 camera_order = 0
                 target_x_percent = 0.0
-                
-                # 最終的に検知した対象の中心座標 (CSV用)
                 detected_center_x = red_center_x
                 detected_center_y = red_center_y
 
                 # --- 判定ロジック ---
 
-                # Case A: 近距離 (30%以上) -> 超音波へ
                 if red_percent > 0.3:
                     camera_order = 4
-                    cv2.rectangle(
-                        frame,
-                        (red_rect[0], red_rect[1]),
-                        (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]),
-                        (0, 0, 255),
-                        2,
-                    )
+                    cv2.rectangle(frame, (red_rect[0], red_rect[1]), 
+                                (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]), (0, 0, 255), 2)
 
-                # Case B: 中距離 (5%以上) -> 色重心で追尾
                 elif red_percent > 0.05:
-                    # 正規化 (-0.5 ~ 0.5)
                     target_x_percent = (red_center_x - frame_center_x) / float(width)
                     
-                    # ★モーター用の逆さ補正 (画像は常に正立なので、機体が裏返っている時だけステア指令を逆にする)
+                    # ★モーター指令の逆さ補正
+                    # 画像は常に正立（現実と同じ左右）に補正されているため、
+                    # 機体が裏返っている時だけ、車輪へのステアリング指令を反転させます。
                     if is_inverted:
                         target_x_percent = -target_x_percent
 
-                    # クランプ
                     target_x_percent = max(-0.5, min(0.5, target_x_percent))
                     camera_order = self._decide_direction(target_x_percent)
-                    
-                    cv2.rectangle(
-                        frame,
-                        (red_rect[0], red_rect[1]),
-                        (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]),
-                        (0, 0, 255),
-                        2,
-                    )
+                    cv2.rectangle(frame, (red_rect[0], red_rect[1]), 
+                                (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]), (0, 0, 255), 2)
 
-                # Case C: 遠距離 -> YOLO探索 (モデルがある場合)
                 else:
                     yolo_found = False
-                    run_yolo = (
-                        self.model is not None
-                        and (self._frame_count % self.yolo_every == 0)
-                        and (self.yolo_red_min <= red_percent < self.yolo_red_max)
-                    )
+                    run_yolo = (self.model is not None and (self._frame_count % self.yolo_every == 0)
+                                and (self.yolo_red_min <= red_percent < self.yolo_red_max))
 
                     if run_yolo:
                         try:
@@ -239,15 +219,13 @@ class Camera:
                                     classes = result.boxes.cls.cpu().numpy()
 
                                     target_ids = self._get_yolo_class_ids()
-                                    if target_ids is None:
-                                        target_ids = [0]
+                                    if target_ids is None: target_ids = [0]
 
                                     valid_mask = np.isin(classes.astype(int), np.array(target_ids, dtype=int)) & (confs >= self.yolo_conf_min)
 
                                     if np.any(valid_mask):
                                         valid_boxes = boxes[valid_mask]
                                         valid_confs = confs[valid_mask]
-
                                         best_idx = int(np.argmax(valid_confs))
                                         box = valid_boxes[best_idx]
                                         conf = float(valid_confs[best_idx])
@@ -258,7 +236,7 @@ class Camera:
 
                                         target_x_percent = (yolo_center_x - frame_center_x) / float(width)
                                         
-                                        # ★モーター用の逆さ補正
+                                        # ★モーター指令の逆さ補正
                                         if is_inverted:
                                             target_x_percent = -target_x_percent
 
@@ -266,59 +244,40 @@ class Camera:
                                         camera_order = self._decide_direction(target_x_percent)
                                         yolo_found = True
                                         
-                                        # CSV用に座標を上書き
                                         detected_center_x = yolo_center_x
                                         detected_center_y = yolo_center_y
 
-                                        # 描画
                                         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
-                                        cv2.putText(
-                                            frame,
-                                            f"{self.yolo_target_class} {conf:.2f}",
-                                            (xmin, max(0, ymin - 10)),
-                                            cv2.FONT_HERSHEY_SIMPLEX,
-                                            0.5,
-                                            (255, 0, 0),
-                                            2,
-                                        )
+                                        cv2.putText(frame, f"{self.yolo_target_class} {conf:.2f}", 
+                                                    (xmin, max(0, ymin - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
                         except Exception as e:
-                            if self.debug:
-                                print(f"YOLO Error: {e}")
+                            if self.debug: print(f"YOLO Error: {e}")
 
-                    # YOLOで見つからず、微小な赤がある場合
                     if (not yolo_found) and (red_percent > 0.001):
                         target_x_percent = (red_center_x - frame_center_x) / float(width)
                         
-                        # ★モーター用の逆さ補正
+                        # ★モーター指令の逆さ補正
                         if is_inverted:
                             target_x_percent = -target_x_percent
 
                         target_x_percent = max(-0.5, min(0.5, target_x_percent))
                         camera_order = self._decide_direction(target_x_percent)
-                        cv2.rectangle(
-                            frame,
-                            (red_rect[0], red_rect[1]),
-                            (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]),
-                            (0, 0, 255),
-                            2,
-                        )
+                        cv2.rectangle(frame, (red_rect[0], red_rect[1]), 
+                                    (red_rect[0] + red_rect[2], red_rect[1] + red_rect[3]), (0, 0, 255), 2)
 
                     if red_percent <= 0.001 and not yolo_found:
                         camera_order = 0
 
-                # 情報表示
                 inv_str = "INV" if is_inverted else "NRM"
                 info = f"Ord:{camera_order} {inv_str} X:{target_x_percent:.2f}"
                 cv2.putText(frame, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-                # ★ CSVへの自動保存
                 if make_csv:
                     try:
-                        a=1#csv保存したくないから入れただけ
-                        #make_csv.print('camera_order', camera_order)
-                        #make_csv.print('camera_area', red_area)
-                        #make_csv.print('camera_center', (detected_center_x, detected_center_y))
-                        #make_csv.print('camera_frame_size', (width, height))
+                        make_csv.print('camera_order', camera_order)
+                        make_csv.print('camera_area', red_area)
+                        make_csv.print('camera_center', (detected_center_x, detected_center_y))
+                        make_csv.print('camera_frame_size', (width, height))
                     except Exception:
                         pass
 
@@ -327,7 +286,7 @@ class Camera:
             except Exception as e:
                 print(f"Camera Process Error: {e}")
                 return np.zeros((480, 640, 3), dtype=np.uint8), 0.0, 0, 0
-        
+
     def _decide_direction(self, x_percent):
         """相対位置から方向指令(1,2,3)を決定"""
         if -0.25 <= x_percent <= 0.25:
