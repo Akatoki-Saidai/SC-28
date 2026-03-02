@@ -235,8 +235,8 @@ def main():
 
     # --- 設定 ---
     #大学
-    GOAL_LAT = 35.8617549
-    GOAL_LON = 139.6073360
+    GOAL_LAT = 35.86189
+    GOAL_LON = 139.60636
 
     bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
     cam = None
