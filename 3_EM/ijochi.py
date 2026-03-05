@@ -20,7 +20,7 @@ abnormal_value_table = {
     "lon": {"min": 130.8, "max": 131.5},
     "alt": {"min": -100, "max": 500},
     "distance": {"min": 0, "max": 20}, # 超音波のゴミかな
-    "euler": {"min": 0, "max": 360}
+    "euler": {"min": -100000, "max": 100000}
 }
 
 # ★ 第1引数を削除し、value_name からスタート
