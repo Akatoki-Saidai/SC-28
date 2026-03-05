@@ -94,7 +94,7 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
         md.move(cmd, power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
         return
 
-    euler = bno.euler()
+    euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
     if euler is None:
         return
     
@@ -109,7 +109,7 @@ def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
     print(f"🔄 フィードバック旋回開始: 現在Yaw={start_yaw:.1f}度, 目標Yaw={target_yaw:.1f}度")
 
     for attempt in range(MAX_ATTEMPTS):
-        curr_euler = bno.euler()
+        curr_euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
         if curr_euler is None:
             break
             
@@ -378,7 +378,7 @@ def main():
                             make_csv.print("msg", f"d_alt:{d_alt:.3f}, count:{consecutive_count}")
 
                             if bno:
-                                euler = bno.euler()
+                                euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
                                 if euler is not None:
                                     make_csv.print("euler", euler)
 
@@ -417,13 +417,18 @@ def main():
                     # --- 【準備】機体の上下判定 ---
                     is_inverted = False
                     if bno:
-                        gravity = bno.gravity()
+                        gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
                         if gravity is not None and gravity[2] < -2.0:
                             is_inverted = True
                             print("🔄 機体が逆さまです！反転モードで走行します。")
 
                     # --- ① 最初のGPS取得 ---
-                    curr_lat, curr_lon = idokeido()
+                    gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=50, retry_delay=1)
+                    if gps_data is not None:
+                        curr_lat, curr_lon = gps_data
+                    else:
+                        curr_lat, curr_lon = None, None
+
                     if curr_lat is None or curr_lon is None:
                         print("❌ 最初のGPS取得に失敗しました。近距離フェーズ(4)へ移行します。")
                         phase = 4
@@ -445,11 +450,16 @@ def main():
                     while phase == 3:
                         # 姿勢更新
                         if bno:
-                            gravity = bno.gravity()
+                            gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
                             is_inverted = (gravity is not None and gravity[2] < -2.0)
 
                         # --- ④ GPS取得とフェイルセーフ処理 ---
-                        curr_lat, curr_lon = idokeido()
+                        gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                        if gps_data is not None:
+                            curr_lat, curr_lon = gps_data
+                        else:
+                            curr_lat, curr_lon = None, None
+
                         if curr_lat is None or curr_lon is None:
                             gps_fail_count += 1
                             print(f"⚠️ GPS取得失敗 ({gps_fail_count}/6)")
@@ -481,7 +491,12 @@ def main():
                                 md.check_stuck(1, is_inverted=is_inverted)
                             
                             print("🔄 リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
-                            recov_lat, recov_lon = idokeido() 
+                            recov_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                            if recov_data is not None:
+                                recov_lat, recov_lon = recov_data
+                            else:
+                                recov_lat, recov_lon = None, None
+
                             if recov_lat is not None and recov_lon is not None:
                                 prev_lat, prev_lon = recov_lat, recov_lon
                                 
@@ -521,7 +536,12 @@ def main():
                             md.check_stuck(is_stacked, is_inverted=is_inverted)
                             
                             print("🔄 リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
-                            recov_lat, recov_lon = idokeido() 
+                            recov_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                            if recov_data is not None:
+                                recov_lat, recov_lon = recov_data
+                            else:
+                                recov_lat, recov_lon = None, None
+
                             if recov_lat is not None and recov_lon is not None:
                                 prev_lat, prev_lon = recov_lat, recov_lon
                                 
@@ -557,7 +577,7 @@ def main():
                             try:
                                 #裏返り判定
                                 if bno:
-                                    gravity = bno.gravity()
+                                    gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
                                     is_inverted = (gravity is not None and gravity[2] < -2.0)
     
                                 #カメラで画像取得＆推論
@@ -587,7 +607,12 @@ def main():
                                         if motor_ok:
                                            md.stop()
                                                                 
-                                        curr_lat, curr_lon = idokeido()
+                                        gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                                        if gps_data is not None:
+                                            curr_lat, curr_lon = gps_data
+                                        else:
+                                            curr_lat, curr_lon = None, None
+
                                         if curr_lat is not None and curr_lon is not None:
                                             d, _ = calculate_distance_and_angle(
                                                 curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON
@@ -636,7 +661,11 @@ def main():
                                     md.stop() # 暴走防止のため一旦停止
     
                                 print("GPSで現在地を確認し、10m圏内かチェックします。")
-                                curr_lat, curr_lon = idokeido()
+                                gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                                if gps_data is not None:
+                                    curr_lat, curr_lon = gps_data
+                                else:
+                                    curr_lat, curr_lon = None, None
     
                                 if curr_lat is not None and curr_lon is not None:
                                     # 距離を計算（方位計算用の過去座標は不要なので現在地をダミーで入れています）
