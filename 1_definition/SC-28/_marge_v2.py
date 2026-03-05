@@ -355,7 +355,8 @@ def main():
                 l_str = f"X:{val(lin_acc[0] if lin_acc else None)}, Y:{val(lin_acc[1] if lin_acc else None)}, Z:{val(lin_acc[2] if lin_acc else None)}"
                 g_str = f"X:{val(gyro[0] if gyro else None)}, Y:{val(gyro[1] if gyro else None)}, Z:{val(gyro[2] if gyro else None)}"
                 grav  = f"{val(gravity[2] if gravity else None, '5.2f')} ({inv_str})"
-                print(f"{l_str:25s} | {g_str:25s} | {grav:10s} | Temp:{val(temp)}C")
+                eul   = f"X:{val(euler[0] if euler else None)}, Y:{val(euler[1] if euler else None)}, Z:{val(euler[2] if euler else None)}"
+                print(f"{l_str:25s} | {g_str:25s} | {grav:10s} | {eul:25s} | Temp:{val(temp)}C")
 
             elif display_mode == 2: # BME
                 print(f" {val(pressure, '7.2f')} hPa        | {val(altitude, '7.2f')} m          | {val(bme_temp, '5.1f')} C      | {val(humidity, '5.1f')} %      | QNH: {val(qnh, '7.2f')}")
