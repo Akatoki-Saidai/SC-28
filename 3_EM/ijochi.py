@@ -16,10 +16,10 @@ abnormal_value_table = {
     "mag": {"min": 0, "max": 250},
     "accel_line": {"min": 0, "max": 25},
     "grav": {"min": 0, "max": 20},
-    "lat": {"min": 30, "max": 50},  
-    "lon": {"min": 130, "max": 150},
+    "lat": {"min": 30.3, "max": 30.9}, # 種子島の緯度経度
+    "lon": {"min": 130.8, "max": 131.5},
     "alt": {"min": -100, "max": 500},
-    "distance": {"min": 0, "max": 20},
+    "distance": {"min": 0, "max": 20}, # 超音波のゴミかな
 }
 
 # ★ 第1引数を削除し、value_name からスタート
