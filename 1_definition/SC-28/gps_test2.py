@@ -13,11 +13,10 @@ def fmt(x, nd=6):
     return "None" if x is None else f"{x:.{nd}f}"
 
 
-# 10進法へ変換する関数（NMEAフォーマット DDMM.MMMMM を想定）
 def to_decimal(coord):
+    """NMEAフォーマット (DDMM.MMMMM) を10進法に変換する術式"""
     if coord is None:
         return None
-    # もしすでに10進法（度が180以下など）になっている場合はそのまま返す安全策
     if coord < 180.0:
         return coord
     
@@ -26,20 +25,46 @@ def to_decimal(coord):
     return deg + (minutes / 60.0)
 
 
+def get_mec_center(points):
+    """点群を囲む最小包含円の中心を近似的に求める術式（反復法）"""
+    if not points:
+        return 0.0, 0.0
+    
+    # 初期位置は全サンプルの重心（平均値）に設定
+    lat_c = sum(p[0] for p in points) / len(points)
+    lon_c = sum(p[1] for p in points) / len(points)
+    
+    # 最も遠い点に向かって少しずつ中心を移動させて最適化する
+    learning_rate = 0.1
+    for _ in range(1000):
+        max_d = -1
+        max_p = points[0]
+        for p in points:
+            # 緯度経度を単純な平面距離として計算（微小範囲なので実用上問題なし）
+            d = math.hypot(p[0] - lat_c, p[1] - lon_c)
+            if d > max_d:
+                max_d = d
+                max_p = p
+        
+        # 最も遠い点に向かって中心を移動
+        lat_c += (max_p[0] - lat_c) * learning_rate
+        lon_c += (max_p[1] - lon_c) * learning_rate
+        learning_rate *= 0.99  # 移動量を徐々に減らす
+        
+    return lat_c, lon_c
+
+
 def main():
     print("=== GPS Runtime Debug Start ===")
     print("Ctrl+C to stop\n")
 
-    # インスタンスを明示生成（シリアルopen確認しやすい）
     gps = GPS()
 
     # 目標地点（テスト用）
-    goal_lat, goal_lon = 35.86128055, 139.60708333 # サークル会館前
+    goal_lat, goal_lon = 35.86128055, 139.60708333
 
-    # start点（進行方向計算用）
     start_lat, start_lon = None, None
 
-    # 統計
     N = 0
     ok_ll = 0
     ok_time = 0
@@ -64,7 +89,6 @@ def main():
             else:
                 ok_ll += 1
                 ll_hist.append((lat, lon))
-                # 平均計算用に座標をリストに保存する
                 all_valid_ll.append((lat, lon))
 
             if tm is None:
@@ -72,11 +96,9 @@ def main():
             else:
                 ok_time += 1
 
-            # start点更新（最初に座標が取れたら確定）
             if start_lat is None and lat is not None:
                 start_lat, start_lon = lat, lon
 
-            # 距離・角度（座標が揃ってる時だけ）
             dist = None
             ang_deg = None
             if (lat is not None) and (start_lat is not None):
@@ -89,7 +111,6 @@ def main():
                     dist = d
                     ang_deg = math.degrees(ang)
 
-            # 1秒に1回くらい表示
             if time.time() - last_print >= 1.0:
                 last_print = time.time()
 
@@ -104,10 +125,8 @@ def main():
                 )
 
                 if dist is not None:
-                    # 相対角度：正=左、負=右（あなたの仕様）
                     print(f"        DistToGoal={dist:8.2f} m | RelAngle={ang_deg:+7.2f} deg")
 
-                # 最新の座標変化（10点分）も軽く見せる
                 if len(ll_hist) >= 2:
                     lat0, lon0 = ll_hist[0]
                     lat1, lon1 = ll_hist[-1]
@@ -122,23 +141,49 @@ def main():
         print("\n=== GPS Runtime Debug End ===")
         print(f"Total={N}  LL_OK={ok_ll}  TIME_OK={ok_time}  LL_None={none_ll}  TIME_None={none_time}")
         
-        # --- 追加部分：平均値の計算と出力 ---
+        # --- 終了時のデータ処理（外側5割の除外と平均計算） ---
         if all_valid_ll:
             sample_count = len(all_valid_ll)
-            # 全ての座標を10進法に変換しながら合計する
-            sum_lat = sum(to_decimal(lat) for lat, lon in all_valid_ll)
-            sum_lon = sum(to_decimal(lon) for lat, lon in all_valid_ll)
             
-            avg_lat = sum_lat / sample_count
-            avg_lon = sum_lon / sample_count
+            # 1. すべての座標を10進法に変換
+            decimal_points = [(to_decimal(lat), to_decimal(lon)) for lat, lon in all_valid_ll]
             
-            print("\n=== 取得座標の平均値 (10進法) ===")
-            print(f"有効サンプル数 : {sample_count}")
-            print(f"北緯 (Lat) 平均: {avg_lat:.6f}")
-            print(f"東経 (Lon) 平均: {avg_lon:.6f}")
-            print("=================================")
+            if sample_count > 2:
+                # 2. 最小包含円の中心を計算
+                center_lat, center_lon = get_mec_center(decimal_points)
+                
+                # 3. 中心からの距離を計算してリスト化
+                dist_points = []
+                for p in decimal_points:
+                    d = math.hypot(p[0] - center_lat, p[1] - center_lon)
+                    dist_points.append((d, p))
+                
+                # 4. 距離が近い（内側にある）順に並び替え
+                dist_points.sort(key=lambda x: x[0])
+                
+                # 5. 半分（5割）を残すため、外側に近いサンプルを除外
+                keep_count = sample_count - (sample_count // 2)
+                kept_points = [p for d, p in dist_points[:keep_count]]
+            else:
+                # サンプル数が少なすぎる場合はそのまま使うよ
+                kept_points = decimal_points
+                keep_count = sample_count
+
+            # 6. 残ったサンプルの平均を計算
+            sum_lat = sum(p[0] for p in kept_points)
+            sum_lon = sum(p[1] for p in kept_points)
+            
+            avg_lat = sum_lat / keep_count
+            avg_lon = sum_lon / keep_count
+            
+            print("\n=== 取得座標の平均値 (外側50%除外) ===")
+            print(f"全取得サンプル数  : {sample_count}")
+            print(f"計算利用サンプル数: {keep_count} (外れ値を除外)")
+            print(f"北緯 (Lat) 平均   : {avg_lat:.6f}")
+            print(f"東経 (Lon) 平均   : {avg_lon:.6f}")
+            print("=====================================")
         else:
-            print("\n有効な座標データが取得できませんでした。")
+            print("\n有効な座標データが取得できなかったみたいだね。")
 
 
 if __name__ == "__main__":
