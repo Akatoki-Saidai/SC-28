@@ -172,9 +172,10 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
     if _gpio_initialized:
         GPIO.output(PIN_VM, 1)
 
-    # 1. 逆さ判定による方向反転
+
+# 1. 逆さ判定による方向反転
     if is_inverted:
-        mapping = {'w': 's', 's': 'w', 'a': 'a', 'd': 'd', 'q': 'e', 'e': 'q'}
+        mapping = {'w': 's', 's': 'w', 'a': 'q', 'd': 'e', 'q': 'd', 'e': 'a'}
         direction = mapping.get(direction, direction)
 
     # 2. モーター値の設定関数 (内部ヘルパー)
