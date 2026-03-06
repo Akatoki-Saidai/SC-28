@@ -35,7 +35,6 @@ def get_circle_3(A, B, C):
     cy = C[1] - A[1]
     D = 2 * (bx * cy - by * cx)
     
-    # 3点が一直線上にあるなどの例外処理
     if abs(D) < 1e-12:
         pts = [A, B, C]
         max_d = -1
@@ -61,13 +60,12 @@ def min_enclosing_circle(points):
         return points[0][0], points[0][1], 0.0
         
     P = list(points)
-    random.shuffle(P) # ランダム化することで計算時間を抑える
+    random.shuffle(P)
     
     c = (P[0][0], P[0][1], 0.0)
     
     for i in range(1, len(P)):
         p = P[i]
-        # 点が現在の円の外側にあるか判定
         if math.hypot(p[0]-c[0], p[1]-c[1]) > c[2] + 1e-9:
             c = (p[0], p[1], 0.0)
             for j in range(i):
@@ -93,7 +91,6 @@ def main():
 
     start_lat, start_lon = None, None
 
-    # 統計
     N = 0
     ok_ll = 0
     ok_time = 0
@@ -102,8 +99,6 @@ def main():
 
     last_print = time.time()
     ll_hist = deque(maxlen=10)
-    
-    # 取得した全ての有効な座標を保存するリスト
     all_valid_ll = []
 
     try:
@@ -170,28 +165,42 @@ def main():
         print("\n=== GPS Runtime Debug End ===")
         print(f"Total={N}  LL_OK={ok_ll}  TIME_OK={ok_time}  LL_None={none_ll}  TIME_None={none_time}")
         
-        # --- 追加部分：平均値と最小包含円の計算 ---
+        # --- 変更部分：中心から近い半分のデータのみで平均を計算 ---
         if all_valid_ll:
-            sample_count = len(all_valid_ll)
-            
-            # 全ての座標を10進法に変換
+            total_samples = len(all_valid_ll)
             decimal_coords = [(to_decimal(lat), to_decimal(lon)) for lat, lon in all_valid_ll]
             
-            # 平均値の計算
-            avg_lat = sum(lat for lat, lon in decimal_coords) / sample_count
-            avg_lon = sum(lon for lat, lon in decimal_coords) / sample_count
-            
-            # 最小包含円の計算
+            # まず最小包含円を計算して、大まかな中心を出す
             cx, cy, radius = min_enclosing_circle(decimal_coords)
             
+            # 中心 (cx, cy) からの距離を計算して、(距離, 座標)のリストを作る
+            # ※地球の丸みを考慮した厳密な距離計算もできるけど、ごく近距離のばらつきならピタゴラスの定理(hypot)で十分だよ
+            distances = []
+            for lat, lon in decimal_coords:
+                dist = math.hypot(lat - cx, lon - cy)
+                distances.append((dist, lat, lon))
+            
+            # 距離が近い順（昇順）に並べ替える
+            distances.sort(key=lambda item: item[0])
+            
+            # 半分のサンプル数を決める（最低でも1つは残す）
+            half_count = max(1, total_samples // 2)
+            
+            # 近い半分のデータだけを取り出す
+            closest_half = distances[:half_count]
+            
+            # 取り出した半分のデータだけで平均を計算
+            avg_lat = sum(lat for dist, lat, lon in closest_half) / half_count
+            avg_lon = sum(lon for dist, lat, lon in closest_half) / half_count
+            
             print("\n=== 取得座標の解析結果 (10進法) ===")
-            print(f"有効サンプル数 : {sample_count}")
-            print(f"【単純平均座標】")
-            print(f"  北緯 (Lat): {avg_lat:.6f}")
-            print(f"  東経 (Lon): {avg_lon:.6f}")
-            print(f"【最小包含円の中心座標】")
+            print(f"総有効サンプル数 : {total_samples}")
+            print(f"【最小包含円の中心座標】(基準点)")
             print(f"  北緯 (Lat): {cx:.6f}")
             print(f"  東経 (Lon): {cy:.6f}")
+            print(f"【円の中心に近い {half_count} 個のデータの平均】")
+            print(f"  北緯 (Lat): {avg_lat:.6f}")
+            print(f"  東経 (Lon): {avg_lon:.6f}")
             print("=================================")
         else:
             print("\n有効な座標データが取得できませんでした。")
