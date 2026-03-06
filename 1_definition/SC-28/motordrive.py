@@ -175,7 +175,7 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
 
 # 1. 逆さ判定による方向反転
     if is_inverted:
-        mapping = {'w': 's', 's': 'w', 'a': 'q', 'd': 'e', 'q': 'd', 'e': 'a'}
+        mapping = {'w': 's', 's': 'w', 'a': 'q', 'd': 'e', 'q': 'a', 'e': 'd'}
         direction = mapping.get(direction, direction)
 
     # 2. モーター値の設定関数 (内部ヘルパー)
