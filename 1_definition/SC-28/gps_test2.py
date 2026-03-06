@@ -3,6 +3,7 @@
 
 import time
 import math
+import random
 from collections import deque
 
 # ★ここをあなたの修正版ファイル名に合わせて変更
@@ -13,8 +14,8 @@ def fmt(x, nd=6):
     return "None" if x is None else f"{x:.{nd}f}"
 
 
+# 10進法へ変換する関数
 def to_decimal(coord):
-    """NMEAフォーマット (DDMM.MMMMM) を10進法に変換する術式"""
     if coord is None:
         return None
     if coord < 180.0:
@@ -25,33 +26,60 @@ def to_decimal(coord):
     return deg + (minutes / 60.0)
 
 
-def get_mec_center(points):
-    """点群を囲む最小包含円の中心を近似的に求める術式（反復法）"""
-    if not points:
-        return 0.0, 0.0
+# --- 最小包含円を計算するための魔法 ---
+def get_circle_3(A, B, C):
+    """3点から外接円の中心と半径を求める"""
+    bx = B[0] - A[0]
+    by = B[1] - A[1]
+    cx = C[0] - A[0]
+    cy = C[1] - A[1]
+    D = 2 * (bx * cy - by * cx)
     
-    # 初期位置は全サンプルの重心（平均値）に設定
-    lat_c = sum(p[0] for p in points) / len(points)
-    lon_c = sum(p[1] for p in points) / len(points)
-    
-    # 最も遠い点に向かって少しずつ中心を移動させて最適化する
-    learning_rate = 0.1
-    for _ in range(1000):
+    # 3点が一直線上にあるなどの例外処理
+    if abs(D) < 1e-12:
+        pts = [A, B, C]
         max_d = -1
-        max_p = points[0]
-        for p in points:
-            # 緯度経度を単純な平面距離として計算（微小範囲なので実用上問題なし）
-            d = math.hypot(p[0] - lat_c, p[1] - lon_c)
-            if d > max_d:
-                max_d = d
-                max_p = p
+        p1, p2 = A, B
+        for i in range(3):
+            for j in range(i+1, 3):
+                d = math.hypot(pts[i][0]-pts[j][0], pts[i][1]-pts[j][1])
+                if d > max_d:
+                    max_d = d
+                    p1, p2 = pts[i], pts[j]
+        return ((p1[0]+p2[0])/2.0, (p1[1]+p2[1])/2.0, max_d/2.0)
         
-        # 最も遠い点に向かって中心を移動
-        lat_c += (max_p[0] - lat_c) * learning_rate
-        lon_c += (max_p[1] - lon_c) * learning_rate
-        learning_rate *= 0.99  # 移動量を徐々に減らす
+    ux = (cy * (bx**2 + by**2) - by * (cx**2 + cy**2)) / D
+    uy = (bx * (cx**2 + cy**2) - cx * (bx**2 + by**2)) / D
+    return (A[0] + ux, A[1] + uy, math.hypot(ux, uy))
+
+
+def min_enclosing_circle(points):
+    """すべての点を囲む最小の円の中心と半径を反復法で求める"""
+    if not points:
+        return 0.0, 0.0, 0.0
+    if len(points) == 1:
+        return points[0][0], points[0][1], 0.0
         
-    return lat_c, lon_c
+    P = list(points)
+    random.shuffle(P) # ランダム化することで計算時間を抑える
+    
+    c = (P[0][0], P[0][1], 0.0)
+    
+    for i in range(1, len(P)):
+        p = P[i]
+        # 点が現在の円の外側にあるか判定
+        if math.hypot(p[0]-c[0], p[1]-c[1]) > c[2] + 1e-9:
+            c = (p[0], p[1], 0.0)
+            for j in range(i):
+                q = P[j]
+                if math.hypot(q[0]-c[0], q[1]-c[1]) > c[2] + 1e-9:
+                    c = ((p[0]+q[0])/2.0, (p[1]+q[1])/2.0, math.hypot(p[0]-q[0], p[1]-q[1])/2.0)
+                    for k in range(j):
+                        r = P[k]
+                        if math.hypot(r[0]-c[0], r[1]-c[1]) > c[2] + 1e-9:
+                            c = get_circle_3(p, q, r)
+    return c
+# --------------------------------------
 
 
 def main():
@@ -61,10 +89,11 @@ def main():
     gps = GPS()
 
     # 目標地点（テスト用）
-    goal_lat, goal_lon = 35.86128055, 139.60708333
+    goal_lat, goal_lon = 35.86128055, 139.60708333 # サークル会館前
 
     start_lat, start_lon = None, None
 
+    # 統計
     N = 0
     ok_ll = 0
     ok_time = 0
@@ -141,49 +170,31 @@ def main():
         print("\n=== GPS Runtime Debug End ===")
         print(f"Total={N}  LL_OK={ok_ll}  TIME_OK={ok_time}  LL_None={none_ll}  TIME_None={none_time}")
         
-        # --- 終了時のデータ処理（外側5割の除外と平均計算） ---
+        # --- 追加部分：平均値と最小包含円の計算 ---
         if all_valid_ll:
             sample_count = len(all_valid_ll)
             
-            # 1. すべての座標を10進法に変換
-            decimal_points = [(to_decimal(lat), to_decimal(lon)) for lat, lon in all_valid_ll]
+            # 全ての座標を10進法に変換
+            decimal_coords = [(to_decimal(lat), to_decimal(lon)) for lat, lon in all_valid_ll]
             
-            if sample_count > 2:
-                # 2. 最小包含円の中心を計算
-                center_lat, center_lon = get_mec_center(decimal_points)
-                
-                # 3. 中心からの距離を計算してリスト化
-                dist_points = []
-                for p in decimal_points:
-                    d = math.hypot(p[0] - center_lat, p[1] - center_lon)
-                    dist_points.append((d, p))
-                
-                # 4. 距離が近い（内側にある）順に並び替え
-                dist_points.sort(key=lambda x: x[0])
-                
-                # 5. 半分（5割）を残すため、外側に近いサンプルを除外
-                keep_count = sample_count - (sample_count // 2)
-                kept_points = [p for d, p in dist_points[:keep_count]]
-            else:
-                # サンプル数が少なすぎる場合はそのまま使うよ
-                kept_points = decimal_points
-                keep_count = sample_count
-
-            # 6. 残ったサンプルの平均を計算
-            sum_lat = sum(p[0] for p in kept_points)
-            sum_lon = sum(p[1] for p in kept_points)
+            # 平均値の計算
+            avg_lat = sum(lat for lat, lon in decimal_coords) / sample_count
+            avg_lon = sum(lon for lat, lon in decimal_coords) / sample_count
             
-            avg_lat = sum_lat / keep_count
-            avg_lon = sum_lon / keep_count
+            # 最小包含円の計算
+            cx, cy, radius = min_enclosing_circle(decimal_coords)
             
-            print("\n=== 取得座標の平均値 (外側50%除外) ===")
-            print(f"全取得サンプル数  : {sample_count}")
-            print(f"計算利用サンプル数: {keep_count} (外れ値を除外)")
-            print(f"北緯 (Lat) 平均   : {avg_lat:.6f}")
-            print(f"東経 (Lon) 平均   : {avg_lon:.6f}")
-            print("=====================================")
+            print("\n=== 取得座標の解析結果 (10進法) ===")
+            print(f"有効サンプル数 : {sample_count}")
+            print(f"【単純平均座標】")
+            print(f"  北緯 (Lat): {avg_lat:.6f}")
+            print(f"  東経 (Lon): {avg_lon:.6f}")
+            print(f"【最小包含円の中心座標】")
+            print(f"  北緯 (Lat): {cx:.6f}")
+            print(f"  東経 (Lon): {cy:.6f}")
+            print("=================================")
         else:
-            print("\n有効な座標データが取得できなかったみたいだね。")
+            print("\n有効な座標データが取得できませんでした。")
 
 
 if __name__ == "__main__":
