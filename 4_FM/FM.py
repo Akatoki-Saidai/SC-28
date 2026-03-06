@@ -1,0 +1,842 @@
+#待機フェーズ＆落下フェーズ
+import os
+import time
+import cv2
+import sys
+import math
+import numpy as np
+import datetime
+import RPi.GPIO as GPIO
+import ijochi
+
+# ★ make_csvをインポート (安全な読み込みとダミークラスの作成)
+try:
+    import make_csv
+except ImportError:
+    class DummyCSV:
+        def print(self, *args, **kwargs):
+            pass
+    make_csv = DummyCSV()
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
+# ==========================================
+# ピン配置設定
+# ==========================================
+LED_PIN = 5
+NICHROME_PIN = 16  # ニクロム線のピンも定義しておく
+
+# ==========================================
+# --- ディレクトリ設定 (画像保存用) ---
+# ==========================================
+
+# 画像を保存する専用フォルダの絶対パス
+PIC_DIR = '/home/sc28/SC-28/5_log/picture'
+
+# プログラム起動時の日時を取得して、今回の保存用サブフォルダを決定
+# (例: /home/pi/SC-28_Pictures/run_20260224_133200)
+session_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+SESSION_SAVE_DIR = os.path.join(PIC_DIR, f"run_{session_time}")
+
+# ==========================================
+# モジュール読み込み
+# ==========================================
+try:
+    from camera import Camera
+    from bno055 import BNO055
+    from bme280 import BME280Sensor
+    from gps import idokeido, calculate_distance_and_angle
+    import motordrive as md
+except ImportError as e:
+    print(f"【警告】モジュール読み込みエラー: {e}")
+    make_csv.print("error", f"モジュール読み込みエラー: {e}")
+    print("一部の機能が制限されますが、続行します。")
+    make_csv.print("warning", "一部の機能が制限されますが、続行します。")
+    time.sleep(2)
+
+# ==========================================
+# ヘルパー関数
+# ==========================================
+def save_frame_if_needed(frame, last_save_time, interval=1.0, save_dir=SESSION_SAVE_DIR):
+    """
+    指定した間隔(interval)で画像を、今回の実行用サブフォルダに保存する。
+    戻り値: 更新された last_save_time
+    """
+    current_time = time.time()
+    # 前回保存時から interval 秒以上経過していたら保存
+    if (current_time - last_save_time) >= interval:
+        # フォルダが存在しなければ作成（起動後最初の1回目に作られます）
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir)
+            except Exception as e:
+                print(f"フォルダ作成エラー: {e}")
+                make_csv.print("error", f"フォルダ作成エラー: {e}")
+                return current_time # 保存失敗でも保存時間を更新することで負荷対策
+
+        # ファイル名（例: img_1684300000.jpg）を作成して保存
+        filename = os.path.join(save_dir, f"img_{int(current_time)}.jpg")
+        try:
+            cv2.imwrite(filename, frame)
+        except Exception as e:
+            print(f"画像保存エラー: {e}")
+            make_csv.print("error", f"画像保存エラー: {e}")
+            
+        return current_time # 保存時間を更新して返す
+        
+    return last_save_time
+
+
+def turn_by_angle(bno, md, initial_angle_diff, is_inverted, motor_ok):
+    """
+    現在の向いている方向から、指定した角度(initial_angle_diff)だけ旋回する。
+    """
+    OMEGA_DEG_PER_SEC = 90.0/20 #20秒で90°
+    MIN_DURATION = 0.3        
+    MAX_ATTEMPTS = 3          
+
+    if not bno or not motor_ok:
+        turn_time = min(abs(initial_angle_diff) / OMEGA_DEG_PER_SEC, 5.0)
+        cmd = 'd' if initial_angle_diff > 0 else 'a'
+        md.move(cmd, power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
+        return
+
+    euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
+    if euler is None:
+        return
+    
+    # 【修正①】初期角度の取得時に逆さ補正を入れる
+    start_yaw = euler[0]
+    if is_inverted:
+        start_yaw = (360.0 - start_yaw) % 360.0 # 回転方向を地面基準に合わせる
+    
+    target_yaw = (start_yaw + initial_angle_diff) % 360.0
+    print(f"🔄 フィードバック旋回開始: 現在Yaw={start_yaw:.1f}度, 目標Yaw={target_yaw:.1f}度")
+    make_csv.print("msg", f"フィードバック旋回開始: 現在Yaw={start_yaw:.1f}度, 目標Yaw={target_yaw:.1f}度")
+
+    for attempt in range(MAX_ATTEMPTS):
+        curr_euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
+        if curr_euler is None:
+            break
+            
+        # 【修正②】現在の角度の取得時にも逆さ補正を入れる
+        curr_yaw = curr_euler[0]
+        if is_inverted:
+            curr_yaw = (360.0 - curr_yaw) % 360.0
+        
+        diff = (target_yaw - curr_yaw + 180) % 360 - 180
+        
+        if abs(diff) < 15.0:
+            print(f"✅ 旋回完了 (最終誤差: {diff:.1f}度)")
+            make_csv.print("msg", f"旋回完了 (最終誤差: {diff:.1f}度)")
+            break
+            
+        turn_time = abs(diff) / OMEGA_DEG_PER_SEC
+        if turn_time < MIN_DURATION:
+            turn_time = MIN_DURATION
+        turn_time = min(turn_time, 4.0)
+        
+        cmd = 'd' if diff > 0 else 'a'
+        print(f"   -> 補正 {attempt+1}/{MAX_ATTEMPTS}: 残り {diff:.1f}度, {turn_time:.2f}秒駆動")
+        make_csv.print("msg", f"補正 {attempt+1}/{MAX_ATTEMPTS}: 残り {diff:.1f}度, {turn_time:.2f}秒駆動")
+        
+        # ここはis_invertedを渡して物理的なモーター反転を任せる
+        md.move(cmd, power=0.7, duration=turn_time, is_inverted=is_inverted, enable_stack_check=False)
+        time.sleep(0.5)
+
+
+# ==========================================
+# セットアップ
+# ==========================================
+def setup_sensors():
+    """カメラ以外の基本センサーとハードウェアのセットアップ"""
+    # --- BNO055 ---
+    print("bnoセットアップ開始")
+    make_csv.print("msg", "bnoセットアップ開始")
+    bno = None
+    for attempt in range(10):
+        try:
+            temp_bno = BNO055()
+            if temp_bno.begin():
+                bno = temp_bno
+                print(f"  -> BNO055: Setup Success (試行回数: {attempt + 1})")
+                make_csv.print("msg", f"BNO055: Setup Success (試行回数: {attempt + 1})")
+                break
+            else:
+                print(f"  -> BNO055: Init Failed (試行回数: {attempt + 1}/10)")
+                make_csv.print("warning", f"BNO055: Init Failed (試行回数: {attempt + 1}/10)")
+        except Exception as e:
+            print(f"  -> BNO055 Setup Error: {e} (試行回数: {attempt + 1}/10)")
+            make_csv.print("error", f"BNO055 Setup Error: {e}")
+        time.sleep(0.5)
+
+    # --- BME280 ---
+    print("bmeセットアップ開始")
+    make_csv.print("msg", "bmeセットアップ開始")
+    bme = None
+    qnh = 1013.25
+    
+    # 最大10回リトライする
+    for attempt in range(10):
+        try:
+            temp_bme = BME280Sensor(debug=False)
+            if temp_bme.calib_ok:
+                qnh = temp_bme.baseline()
+                bme = temp_bme  # 成功したら正式に代入
+                print(f"BME280: Setup Success (試行回数: {attempt + 1})")
+                make_csv.print("msg", f"BME280: Setup Success (試行回数: {attempt + 1})")
+                break  # 成功したのでループを抜ける
+            else:
+                print(f"BME280: Calibration Failed (試行回数: {attempt + 1}/10)")
+                make_csv.print("warning", f"BME280: Calibration Failed (試行回数: {attempt + 1}/10)")
+        except Exception as e:
+            print(f"BME280 Setup Error: {e} (試行回数: {attempt + 1}/10)")
+            make_csv.print("error", f"BME280 Setup Error: {e}")
+        
+        time.sleep(0.5)  # 失敗した場合、0.5秒待ってから再試行
+
+    # --- Motor ---
+    print("モータセットアップ開始")
+    make_csv.print("msg", "モータセットアップ開始")
+    motor_ok = False
+    try:
+        md.setup_motors()
+        motor_ok = True
+    except Exception as e:
+        print(f"Motor Setup Error: {e}")
+        make_csv.print("error", f"Motor Setup Error: {e}")
+
+    # --- GPIO (LED, ニクロム線) ---
+    print("GPIOセットアップ開始")
+    make_csv.print("msg", "GPIOセットアップ開始")
+    gpio_ok = False
+    try:
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(LED_PIN, GPIO.OUT)
+        GPIO.setup(NICHROME_PIN, GPIO.OUT)
+
+        # 【超重要】起動直後は絶対にOFFにする（安全対策）
+        GPIO.output(LED_PIN, 0)
+        GPIO.output(NICHROME_PIN, 0)
+        gpio_ok = True
+    except Exception as e:
+        print(f"GPIO Setup Error: {e}")
+        make_csv.print("error", f"GPIO Setup Error: {e}")
+
+    return bno, bme, qnh, motor_ok, gpio_ok
+
+def setup_camera():
+    """カメラとAIモデルのセットアップ（必要な時に呼び出す）"""
+    print("cameraセットアップ開始")
+    make_csv.print("msg", "cameraセットアップ開始")
+    cam = None
+    try:
+        cam = Camera(model_path="./my_custom_model.pt", debug=True)
+    except Exception as e:
+        print(f"Camera Setup Error: {e}")
+        make_csv.print("error", f"Camera Setup Error: {e}")
+    return cam
+
+def close_camera(cam):
+    """カメラとAIモデルを安全に停止し、メモリ・リソースを解放する"""
+    if cam is not None:
+        print("📷 カメラを停止し、リソースを解放します...")
+        make_csv.print("msg", "カメラを停止し、リソースを解放します...")
+        try:
+            cam.close()
+        except Exception as e:
+            print(f"Camera Close Error: {e}")
+            make_csv.print("error", f"Camera Close Error: {e}")
+    # 完全に空っぽ(None)にして返すのがポイント
+    return None
+
+
+
+# ==========================================
+# メイン処理
+# ==========================================
+def main():
+
+    # --- 設定 ---
+    #あおぞら広場赤い馬30.4153855, 130.9013989
+    GOAL_LAT = 30.4153855
+    GOAL_LON = 130.9013989
+
+    bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
+    cam = None
+    
+
+    print("\n=== デバイス接続状況 ===")
+    make_csv.print("msg", "=== デバイス接続状況 ===")
+    msg_bno = f"* BNO055 : {'OK' if bno else 'Skip'}"
+    msg_cam = f"* Camera : {'OK' if cam else 'Skip'}"
+    msg_bme = f"* BME280 : {'OK' if bme else 'Skip'}"
+    msg_mot = f"* Motors : {'OK' if motor_ok else 'Skip'}"
+    print(msg_bno)
+    print(msg_cam)
+    print(msg_bme)
+    print(msg_mot)
+    make_csv.print("msg", f"{msg_bno}, {msg_cam}, {msg_bme}, {msg_mot}")
+    print("========================\n")
+    
+    # ★追加: ゴール座標を記録しておく
+    make_csv.print("goal_lat", GOAL_LAT)
+    make_csv.print("goal_lon", GOAL_LON)
+
+    prev_lat, prev_lon = None, None
+
+    first_data_fetched = False
+    last_gps_error_time = 0
+
+    last_image_save_time = 0
+
+    phase = 3
+    make_csv.print("msg","start phase1")
+    make_csv.print("phase","1")
+
+    launch_count = 0
+
+    try:
+        while True:
+            try:
+                if phase == 1:
+                    try:
+                        if not bme:
+                            phase = 2
+                            make_csv.print("phase","2")
+                            continue
+
+                        # ★追加: 温度もついでにログに残しておく（機体の熱暴走監視）
+                        ijochi.abnormal_check("temp", bme.temperature, ERROR_FLAG=False)
+
+                        # ★ 1. ijochiで気圧だけを安全に取得（異常値チェック＆自動CSV保存）
+                        p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
+                        if p is None:
+                            time.sleep(0.5)
+                            continue
+
+                        # ★ 2. 正常な気圧データをもとに、高度を計算
+                        alt = bme.altitude(p, qnh=qnh)
+                        if alt is None:
+                            time.sleep(0.5)
+                            continue
+                        
+                        # ★ 3. 高度はijochiを通らないため手動でCSV保存
+                        make_csv.print("alt", alt)
+
+                        print(f"[待機] alt={alt:.3f} m")
+                        make_csv.print("msg", f"[待機] alt={alt:.3f} m")
+
+                        if alt >= 10.0:
+                            launch_count += 1
+                            if launch_count >= 5:
+                                print("5回連続で10m以上を検知しました。Go to falling phase")
+                                make_csv.print("msg","5回連続で10m以上を検知しました。Go to falling phase")
+                                make_csv.print("phase","2")
+                                phase = 2
+                            else:
+                                time.sleep(1.0)
+
+                        else:
+                            launch_count = 0
+                            time.sleep(1.0)
+
+                    except Exception as e:
+                        print(f"Error in wait phase: {e}")
+                        make_csv.print("error",f"Error in wait phase: {e}")
+                        time.sleep(1)
+
+                elif phase == 2:
+                    try:
+                        if not bme:
+                            print("BME280が使えないため落下フェーズをスキップします")
+                            make_csv.print("error","BME280が使えないため落下フェーズをスキップします")
+                            phase = 3
+                            continue
+                        if not gpio_ok:
+                            print("GPIOが使えないためニクロム線を安全に駆動できません")
+                            make_csv.print("error","GPIOが使えないためニクロム線を安全に駆動できません")
+                            phase = 3
+                            continue
+
+                        FALL_TIMEOUT_SEC = 180.0
+                        fall_start_time = time.time()
+
+                        consecutive_count = 0
+                        REQUIRED_COUNT = 5  
+                        D_ALT_THRESH = 0.5  
+
+                        # --- 初期気圧・高度の取得 ---
+                        p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
+                        if p is None:
+                            print("初期気圧の取得に失敗しました。再試行します。")
+                            make_csv.print("warning","初期気圧の取得に失敗しました。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        alt_prev = bme.altitude(p, qnh=qnh)
+                        if alt_prev is None:
+                            print("初期高度の計算に失敗しました。再試行します。")
+                            make_csv.print("warning","初期高度の計算に失敗しました。再試行します。")
+                            time.sleep(0.5)
+                            continue
+
+                        make_csv.print("alt", alt_prev)
+                        print(f"fall start alt={alt_prev:.3f} m")
+                        make_csv.print("msg", f"fall start alt={alt_prev:.3f} m")
+
+                        # --- 落下判定ループ ---
+                        while True:
+                            #投下試験用に削除
+                            #if time.time() - fall_start_time >= FALL_TIMEOUT_SEC:
+                            #    print("3分経過 → 強制分離")
+                            #    break
+
+                            time.sleep(1.0)
+
+                            # ★追加: 落下中も温度を記録
+                            if bme:
+                                ijochi.abnormal_check("temp", bme.temperature, ERROR_FLAG=False)
+
+                            # 落下中もijochiで気圧を取得
+                            p = ijochi.abnormal_check("press", bme.pressure, ERROR_FLAG=False)
+                            if p is None:
+                                print("BME280: 気圧の取得失敗(ijochi)。スキップします。")
+                                make_csv.print("warning", "BME280: 気圧の取得失敗(ijochi)。スキップします。")
+                                continue
+
+                            alt_now = bme.altitude(p, qnh=qnh)
+                            if alt_now is None:
+                                print("BME280: 高度の計算失敗。スキップします。")
+                                make_csv.print("warning", "BME280: 高度の計算失敗。スキップします。")
+                                continue
+
+                            make_csv.print("alt", alt_now)
+                            d_alt = abs(alt_now - alt_prev)
+
+                            print(
+                                f"alt={alt_now:.3f} m, "
+                                f"Δalt(1s)={d_alt:.3f} m "
+                                f"({consecutive_count}/{REQUIRED_COUNT})"
+                            )
+                            make_csv.print("msg", f"d_alt:{d_alt:.3f}, count:{consecutive_count}")
+
+                            if bno:
+                                euler = ijochi.abnormal_check("euler", bno.euler, ERROR_FLAG=False)
+                                if euler is not None:
+                                    make_csv.print("euler", euler)
+
+                            if alt_now <= 7.0 and d_alt <= D_ALT_THRESH:
+                                consecutive_count += 1
+                            else:
+                                consecutive_count = 0
+
+                            if consecutive_count >= REQUIRED_COUNT:
+                                print("Landing detected")
+                                make_csv.print("msg","Landing detected")
+                                break
+
+                            alt_prev = alt_now
+
+                        # ニクロム線作動（パラシュート分離）
+                        print("start nichrome wire")
+                        make_csv.print("msg","start nichrome wire")
+                        GPIO.output(NICHROME_PIN, 1)
+                        time.sleep(15)
+                        GPIO.output(NICHROME_PIN, 0)
+                        print("finish nichrome wire")
+                        make_csv.print("msg","finish nichrome wire")
+
+                        phase = 3
+                        make_csv.print("phase","3")
+
+                    except Exception as e:
+                        print(f"Error in falling phase: {e}")
+                        make_csv.print("error", f"Error in falling phase: {e}")
+                        time.sleep(1)
+                elif phase == 3:
+                    
+                    print("\n--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
+                    make_csv.print("msg", "--- フェーズ3: 遠距離フェーズ（GPS誘導） ---")
+
+                    
+                    # --- 【準備】機体の上下判定 ---
+                    is_inverted = False
+                    if bno:
+                        gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
+                        if gravity is not None and gravity[2] < -2.0:
+                            is_inverted = True
+                            print("🔄 機体が逆さまです！反転モードで走行します。")
+                            make_csv.print("msg", "機体が逆さまです！反転モードで走行します。")
+
+                    # --- ① 最初のGPS取得 ---
+                    gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=50, retry_delay=1)
+                    if gps_data is not None:
+                        curr_lat, curr_lon = gps_data
+                    else:
+                        curr_lat, curr_lon = None, None
+
+                    if curr_lat is None or curr_lon is None:
+                        print("❌ 最初のGPS取得に失敗しました。近距離フェーズ(4)へ移行します。")
+                        make_csv.print("error", "最初のGPS取得に失敗しました。近距離フェーズ(4)へ移行します。")
+                        make_csv.print("msg","サブキャリア脱出のために前進します")
+                        print("サブキャリア脱出のために前進")
+                        if motor_ok:
+                            md.move('w', power=0.7, duration=10.0, is_inverted=is_inverted, enable_stack_check=False)
+                        phase = 4
+                        make_csv.print("phase", "4") # ★追加
+                        continue
+                    
+                    prev_lat, prev_lon = curr_lat, curr_lon
+
+                    # --- ② 方位把握のための初期前進 (ベクトル構築) ---
+                    print("🚀 方位計算のため、初期前進 (15.0s) を行います。")
+                    make_csv.print("msg", "方位計算のため、初期前進 (15.0s) を行います。")
+                    if motor_ok:
+                        md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
+                        print("⏹️ 停止してGPSの安定を待ちます...")
+                        make_csv.print("msg", "停止してGPSの安定を待ちます...")
+                        time.sleep(1.0) 
+
+                    # ==========================================
+                    # ③ ゴールに向かうメインループ
+                    # ==========================================
+                    gps_fail_count = 0
+                    while phase == 3:
+                        # ★追加: 走行中も定期的に温度を記録
+                        if bme:
+                            ijochi.abnormal_check("temp", bme.temperature, ERROR_FLAG=False)
+
+                        # 姿勢更新
+                        if bno:
+                            gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
+                            is_inverted = (gravity is not None and gravity[2] < -2.0)
+
+                        # --- ④ GPS取得とフェイルセーフ処理 ---
+                        gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                        if gps_data is not None:
+                            curr_lat, curr_lon = gps_data
+                        else:
+                            curr_lat, curr_lon = None, None
+
+                        if curr_lat is None or curr_lon is None:
+                            gps_fail_count += 1
+                            print(f"⚠️ GPS取得失敗 ({gps_fail_count}/6)")
+                            make_csv.print("warning", f"GPS取得失敗 ({gps_fail_count}/6)")
+                            
+                            if gps_fail_count >= 6:
+                                print("❌ GPSタイムアウト。近距離フェーズへ強制移行します。")
+                                make_csv.print("error", "GPSタイムアウト。近距離フェーズへ強制移行します。")
+                                phase = 4
+                                make_csv.print("phase", "4") # ★追加
+                                break
+                            elif gps_fail_count == 3:
+                                print("🔄 環境を変えるため少し前進します。")
+                                make_csv.print("msg", "環境を変えるため少し前進します。")
+                                if motor_ok:
+                                    md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=False)
+                            
+                            time.sleep(1)
+                            continue
+                        
+                        gps_fail_count = 0 
+
+                        # --- ⑤ ゴールとの距離と方位ズレ計算 ---
+                        d, ang_rad = calculate_distance_and_angle(
+                            curr_lat, curr_lon, prev_lat, prev_lon, GOAL_LAT, GOAL_LON
+                        )
+                        
+                        # ★ここを変更: 異常値(実質的なスタック)の処理
+                        if d > 1000000:
+                            print("⚠️ GPS方位計算エラー (移動距離不足)。スタックと判断してリカバリー行動を開始します。")
+                            make_csv.print("warning", "GPS方位計算エラー (移動距離不足)。スタックと判断してリカバリー行動を開始します。")
+                            if motor_ok:
+                                # 強制的に is_stacked=1 としてスタック脱出動作を呼び出す
+                                md.check_stuck(1, is_inverted=is_inverted)
+                            
+                            print("🔄 リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
+                            make_csv.print("msg", "リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
+                            recov_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                            if recov_data is not None:
+                                recov_lat, recov_lon = recov_data
+                            else:
+                                recov_lat, recov_lon = None, None
+
+                            if recov_lat is not None and recov_lon is not None:
+                                prev_lat, prev_lon = recov_lat, recov_lon
+                                
+                            if motor_ok:
+                                md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
+                                print("⏹️ 停止してGPSの安定を待ちます...")
+                                make_csv.print("msg", "停止してGPSの安定を待ちます...")
+                                time.sleep(1.0)
+                            
+                            # ループ先頭に戻って新しいcurrを取得し直す
+                            continue
+
+                        deg_diff = math.degrees(ang_rad)
+                        print(f"📍 GPS: ゴールまで残り {d:.2f}m / 角度のズレ {deg_diff:.1f}度")
+                        make_csv.print("msg", f"GPS: ゴールまで残り {d:.2f}m / 角度のズレ {deg_diff:.1f}度")
+
+                        # --- ⑥ ゴール判定 ---
+                        if d <= 10.0:
+                            print("🎯 ゴール10m圏内に到達！近距離フェーズへ移行します。")
+                            make_csv.print("msg", "ゴール10m圏内に到達！近距離フェーズへ移行します。")
+                            phase = 4
+                            make_csv.print("phase", "4") # ★追加
+                            break
+
+                        # --- ⑦ BNO055フィードバック旋回 ---
+                        if abs(deg_diff) > 15.0:
+                            print(f"↪️ 目標角度へ向けて旋回します (ズレ: {deg_diff:.1f}度)")
+                            make_csv.print("msg", f"目標角度へ向けて旋回します (ズレ: {deg_diff:.1f}度)")
+                            turn_by_angle(bno, md, deg_diff, is_inverted, motor_ok)
+
+                        # --- ⑧ Stop & Go方式による前進 ---
+                        print("⬆️ Stop & Go: 15秒前進します")
+                        make_csv.print("msg", "Stop & Go: 15秒前進します")
+                        is_stacked = False
+                        if motor_ok:
+                            is_stacked = md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=True)
+                            print("⏹️ 停止して待機中...")
+                            make_csv.print("msg", "停止して待機中...")
+                            time.sleep(1.0) 
+
+                        # --- ⑨ ジャイロセンサによるスタック検知とリカバリー ---
+                        if is_stacked:
+                            print("💥 スタック検知(ジャイロ)！自動リカバリー行動を開始します。")
+                            make_csv.print("warning", "スタック検知(ジャイロ)！自動リカバリー行動を開始します。")
+                            md.check_stuck(is_stacked, is_inverted=is_inverted)
+                            
+                            print("🔄 リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
+                            make_csv.print("msg", "リカバリー完了。ベクトルを整えるため現在地をリセットし、初期前進をやり直します。")
+                            recov_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                            if recov_data is not None:
+                                recov_lat, recov_lon = recov_data
+                            else:
+                                recov_lat, recov_lon = None, None
+
+                            if recov_lat is not None and recov_lon is not None:
+                                prev_lat, prev_lon = recov_lat, recov_lon
+                                
+                            if motor_ok:
+                                md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
+                                print("⏹️ 停止してGPSの安定を待ちます...")
+                                make_csv.print("msg", "停止してGPSの安定を待ちます...")
+                                time.sleep(1.0)
+                            
+                            continue
+                        
+                        # --- ⑩ 次のループの計算のために保存 ---
+                        if curr_lat is not None:
+                            prev_lat, prev_lon = curr_lat, curr_lon
+                            
+                        time.sleep(0.1)
+
+                elif phase == 4:
+                    
+                    #ここに近距離フェーズの処理
+                    print("\n--- フェーズ4: 近距離フェーズ（カメラ誘導） ---")
+                    make_csv.print("msg", "--- フェーズ4: 近距離フェーズ（カメラ誘導） ---")
+                    
+                    if not cam:
+                        print("カメラのセットアップ開始")
+                        make_csv.print("msg", "カメラのセットアップ開始")
+                        cam = setup_camera()
+                        print("カメラのセットアップ完了")
+                        make_csv.print("msg", "カメラのセットアップ完了")
+
+                    if not cam:
+                        print("カメラが認識されていません。フェーズ4をスキップします。")
+                        make_csv.print("error", "カメラが認識されていません。フェーズ4をスキップします。")
+                    else:
+                        is_inverted = False
+                        lost_count = 0 #ターゲットを見失った連続回数をカウントする変数
+                        
+                        while phase == 4:
+                            try:
+                                #裏返り判定
+                                if bno:
+                                    gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
+                                    is_inverted = (gravity is not None and gravity[2] < -2.0)
+    
+                                #カメラで画像取得＆推論
+                                frame, x_pct, order, area = cam.capture_and_detect(is_inverted=is_inverted)
+                                is_stacked = 0
+
+                                # ★追加：取得した画像をログとして保存する
+                                last_image_save_time = save_frame_if_needed(frame, last_image_save_time)
+    
+                                #YOLOの指令に基づく行動
+                                if order == 4:
+                                    print(f"ターゲットに超接近（面積: {area}）。ゴールと判定します！")
+                                    make_csv.print("msg", f"ターゲットに超接近（面積: {area}）。ゴールと判定します！")
+                                    if motor_ok:
+                                        md.stop()
+                                    phase = 5
+                                    make_csv.print("phase", "5") # ★追加
+                                    break 
+                                    
+                                elif order == 0:
+                                    print("ターゲットを見失いました。探索のため右回転します。")
+                                    make_csv.print("msg", "ターゲットを見失いました。探索のため右回転します。")
+                                    lost_count += 1
+                                    if motor_ok:
+                                        md.move('e', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        md.move("w", power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=False)
+
+                                    #10回連続（約5秒間）見失ったら、GPSで現在地を確認する
+                                    if lost_count >= 10:
+                                        print("長時間ターゲットが見つかりません。現在地をGPSで確認します...")
+                                        make_csv.print("warning", "長時間ターゲットが見つかりません。現在地をGPSで確認します...")
+                                        if motor_ok:
+                                           md.stop()
+                                                                
+                                        gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                                        if gps_data is not None:
+                                            curr_lat, curr_lon = gps_data
+                                        else:
+                                            curr_lat, curr_lon = None, None
+
+                                        if curr_lat is not None and curr_lon is not None:
+                                            d, _ = calculate_distance_and_angle(
+                                                curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON
+                                            )
+                                            print(f"ゴールまでの距離: {d:.2f}m")
+                                            make_csv.print("msg", f"ゴールまでの距離: {d:.2f}m")
+                                                                
+                                            if d <= 10.0:
+                                                print("10m圏内を維持しています。カウントをリセットし、探索を継続します。")
+                                                make_csv.print("msg", "10m圏内を維持しています。カウントをリセットし、探索を継続します。")
+                                                lost_count = 0 # まだ近くにいるので、もう一度探してみる
+                                            else:
+                                                print("10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                                make_csv.print("warning", "10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                                phase = 3
+                                                break
+                                        else:
+                                            print("GPS取得失敗。安全のため探索を継続します。")
+                                            make_csv.print("error", "GPS取得失敗。安全のため探索を継続します。")
+                                            lost_count = 0 # 取得できなかった場合はとりあえず探索継続  
+                                        
+                                elif order == 1:
+                                    print("ターゲットは正面です。直進します。")
+                                    make_csv.print("msg", "ターゲットは正面です。直進します。")
+                                    if motor_ok:
+                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                        
+                                elif order == 2:
+                                    print("ターゲットが右です。右に旋回してから前進します。")
+                                    make_csv.print("msg", "ターゲットが右です。右に旋回してから前進します。")
+                                    if motor_ok:
+                                        md.move('e', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=True)
+                                        
+                                elif order == 3:
+                                    print("ターゲットが左です。左に旋回してから前進します。")
+                                    make_csv.print("msg", "ターゲットが左です。左に旋回してから前進します。")
+                                    if motor_ok:
+                                        md.move('q', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=True)
+    
+                                # ④ スタック判定とリカバリー（motordriveにお任せ）
+                                if motor_ok and is_stacked:
+                                    print("スタックを検知しました。リカバリー行動を開始します。")
+                                    make_csv.print("warning", "スタックを検知しました。リカバリー行動を開始します。")
+                                    md.check_stuck(is_stacked, is_inverted=is_inverted)
+                                    
+                                time.sleep(0.1)
+    
+                            except Exception as e:
+                                # ＝＝＝ ここからが追加したGPS安全装置 ＝＝＝
+                                print(f"カメラ等でエラー発生: {e}")
+                                make_csv.print("error", f"カメラ等でエラー発生: {e}")
+                                if motor_ok:
+                                    md.stop() # 暴走防止のため一旦停止
+    
+                                print("GPSで現在地を確認し、10m圏内かチェックします。")
+                                gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                                if gps_data is not None:
+                                    curr_lat, curr_lon = gps_data
+                                else:
+                                    curr_lat, curr_lon = None, None
+    
+                                if curr_lat is not None and curr_lon is not None:
+                                    # 距離を計算（方位計算用の過去座標は不要なので現在地をダミーで入れています）
+                                    d, _ = calculate_distance_and_angle(
+                                        curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON
+                                    )
+                                    print(f"ゴールまでの距離: {d:.2f}m")
+                                    make_csv.print("msg", f"ゴールまでの距離: {d:.2f}m")
+    
+                                    if d <= 10.0:
+                                        print("10m圏内を維持しています。近距離フェーズを継続します。")
+                                        make_csv.print("msg", "10m圏内を維持しています。近距離フェーズを継続します。")
+                                        time.sleep(0.1)
+                                        continue # ループの先頭に戻ってカメラ再取得
+                                    else:
+                                        print("10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                        make_csv.print("warning", "10m圏外に出てしまいました。遠距離フェーズ(3)に戻ります。")
+                                        phase = 3
+                                        break # 近距離のループを抜けて、フェーズ3へ戻る
+                                else:
+                                    print("GPSの取得にも失敗しました。安全のため近距離フェーズを維持してリトライします。")
+                                    make_csv.print("error", "GPSの取得にも失敗しました。安全のため近距離フェーズを維持してリトライします。")
+                                    time.sleep(0.1)
+                                    continue
+                elif phase == 5:
+                    #ここにゴールフェーズの処理
+                    print("--- フェーズ5 (ゴール完了) ---")
+                    make_csv.print("msg", "--- フェーズ5 (ゴール完了) ---")
+                    print("LEDを点滅させて待機します。終了するには Ctrl+C を押してください。")
+                    make_csv.print("msg", "LEDを点滅させて待機します。終了するには Ctrl+C を押してください。")
+                    while True:
+                        GPIO.output(LED_PIN, 1) # LEDオン
+                        time.sleep(1)         # 1秒待つ
+                        GPIO.output(LED_PIN, 0) # LEDオフ
+                        time.sleep(1)         # 1秒待つ
+
+                time.sleep(0.1)
+
+
+
+            except Exception as e:
+                print(f"\n予期せぬエラーが発生しました: {e}")
+                make_csv.print("serious_error", f"予期せぬエラーが発生しました: {e}")
+                time.sleep(2.0)
+
+
+
+    except KeyboardInterrupt:
+        print("\n中断されました。")
+        make_csv.print("msg", "中断されました。")
+    except Exception as e:
+        print(f"\n予期せぬエラーが発生しました: {e}")
+        make_csv.print("serious_error", f"予期せぬエラーが発生しました: {e}")
+    finally:
+        print("\n終了処理中... (Motors, Camera, Sensors)")
+        make_csv.print("msg", "終了処理中... (Motors, Camera, Sensors)")
+        if cam: 
+            try: cam.close()
+            except: pass
+        if bno: 
+            try: bno.close()
+            except: pass
+        if bme: 
+            try: bme.close()
+            except: pass
+        if motor_ok:
+            try: md.cleanup()
+            except: pass
+        if gpio_ok:
+            try:
+                GPIO.output(LED_PIN, 0)
+                GPIO.output(NICHROME_PIN, 0)
+                GPIO.cleanup()
+            except: pass
+        try: cv2.destroyAllWindows()
+        except: pass
+        print("完了。お疲れ様でした。")
+        make_csv.print("msg", "完了。お疲れ様でした。")
+
+if __name__ == "__main__":
+    main()
