@@ -165,42 +165,50 @@ def main():
         print("\n=== GPS Runtime Debug End ===")
         print(f"Total={N}  LL_OK={ok_ll}  TIME_OK={ok_time}  LL_None={none_ll}  TIME_None={none_time}")
         
-        # --- 変更部分：中心から近い半分のデータのみで平均を計算 ---
+        # --- 最終的な解析と出力 ---
         if all_valid_ll:
             total_samples = len(all_valid_ll)
             decimal_coords = [(to_decimal(lat), to_decimal(lon)) for lat, lon in all_valid_ll]
             
-            # まず最小包含円を計算して、大まかな中心を出す
+            # 1. 最小包含円の中心を計算
             cx, cy, radius = min_enclosing_circle(decimal_coords)
             
-            # 中心 (cx, cy) からの距離を計算して、(距離, 座標)のリストを作る
-            # ※地球の丸みを考慮した厳密な距離計算もできるけど、ごく近距離のばらつきならピタゴラスの定理(hypot)で十分だよ
+            # 2. 全サンプルの純粋な平均を計算
+            pure_avg_lat = sum(lat for lat, lon in decimal_coords) / total_samples
+            pure_avg_lon = sum(lon for lat, lon in decimal_coords) / total_samples
+            
+            # 3. 中心から見て、純粋な平均と逆方向の地点を計算
+            # (2 * 中心の座標) - 平均の座標
+            opp_lat = 2 * cx - pure_avg_lat
+            opp_lon = 2 * cy - pure_avg_lon
+            
+            # 4. 中心から近い半分のデータのみで平均を計算
             distances = []
             for lat, lon in decimal_coords:
                 dist = math.hypot(lat - cx, lon - cy)
                 distances.append((dist, lat, lon))
             
-            # 距離が近い順（昇順）に並べ替える
             distances.sort(key=lambda item: item[0])
-            
-            # 半分のサンプル数を決める（最低でも1つは残す）
             half_count = max(1, total_samples // 2)
-            
-            # 近い半分のデータだけを取り出す
             closest_half = distances[:half_count]
             
-            # 取り出した半分のデータだけで平均を計算
-            avg_lat = sum(lat for dist, lat, lon in closest_half) / half_count
-            avg_lon = sum(lon for dist, lat, lon in closest_half) / half_count
+            half_avg_lat = sum(lat for dist, lat, lon in closest_half) / half_count
+            half_avg_lon = sum(lon for dist, lat, lon in closest_half) / half_count
             
             print("\n=== 取得座標の解析結果 (10進法) ===")
             print(f"総有効サンプル数 : {total_samples}")
             print(f"【最小包含円の中心座標】(基準点)")
             print(f"  北緯 (Lat): {cx:.6f}")
             print(f"  東経 (Lon): {cy:.6f}")
+            print(f"【全サンプルの純粋な平均】")
+            print(f"  北緯 (Lat): {pure_avg_lat:.6f}")
+            print(f"  東経 (Lon): {pure_avg_lon:.6f}")
+            print(f"【円の中心から見て平均と逆方向の地点】(偏りの補正候補)")
+            print(f"  北緯 (Lat): {opp_lat:.6f}")
+            print(f"  東経 (Lon): {opp_lon:.6f}")
             print(f"【円の中心に近い {half_count} 個のデータの平均】")
-            print(f"  北緯 (Lat): {avg_lat:.6f}")
-            print(f"  東経 (Lon): {avg_lon:.6f}")
+            print(f"  北緯 (Lat): {half_avg_lat:.6f}")
+            print(f"  東経 (Lon): {half_avg_lon:.6f}")
             print("=================================")
         else:
             print("\n有効な座標データが取得できませんでした。")
