@@ -289,7 +289,7 @@ def main():
 
     last_image_save_time = 0
 
-    phase = 3
+    phase = 1
     make_csv.print("msg","start phase1")
     make_csv.print("phase","1")
 
