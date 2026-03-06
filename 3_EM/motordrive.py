@@ -183,10 +183,10 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
         p = min(1.0 , p) #浮動小数点の誤差で1.0を超えないように
         if d == 'w':   mr, ml = p, p
         elif d == 's': mr, ml = -p, -p
-        elif d == 'a': mr, ml = p*0.2, p  # 左旋回
-        elif d == 'd': mr, ml = p, p*0.2  # 右旋回
-        elif d == 'q': mr, ml = 0, p   # その場左
-        elif d == 'e': mr, ml = p, 0   # その場右
+        elif d == 'a': mr, ml = p*0.2, p  # 左前旋回
+        elif d == 'd': mr, ml = p, p*0.2  # 右前旋回
+        elif d == 'e': mr, ml = -p*0.2, -p   # 右後旋回
+        elif d == 'q': mr, ml = -p, -p*0.2   # 左後旋回
         else: return False
         
         motor_right.value = mr
