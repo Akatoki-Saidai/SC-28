@@ -485,10 +485,10 @@ def main():
                     prev_lat, prev_lon = curr_lat, curr_lon
 
                     # --- ② 方位把握のための初期前進 (ベクトル構築) ---
-                    print("🚀 方位計算のため、初期前進 (5.0s) を行います。")
-                    make_csv.print("msg", "方位計算のため、初期前進 (5.0s) を行います。")
+                    print("🚀 方位計算のため、初期前進 (15.0s) を行います。")
+                    make_csv.print("msg", "方位計算のため、初期前進 (15.0s) を行います。")
                     if motor_ok:
-                        md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=False)
+                        md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
                         print("⏹️ 停止してGPSの安定を待ちます...")
                         make_csv.print("msg", "停止してGPSの安定を待ちます...")
                         time.sleep(1.0) 
@@ -561,7 +561,7 @@ def main():
                                 prev_lat, prev_lon = recov_lat, recov_lon
                                 
                             if motor_ok:
-                                md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=False)
+                                md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
                                 print("⏹️ 停止してGPSの安定を待ちます...")
                                 make_csv.print("msg", "停止してGPSの安定を待ちます...")
                                 time.sleep(1.0)
@@ -588,11 +588,11 @@ def main():
                             turn_by_angle(bno, md, deg_diff, is_inverted, motor_ok)
 
                         # --- ⑧ Stop & Go方式による前進 ---
-                        print("⬆️ Stop & Go: 5秒前進します")
-                        make_csv.print("msg", "Stop & Go: 5秒前進します")
+                        print("⬆️ Stop & Go: 15秒前進します")
+                        make_csv.print("msg", "Stop & Go: 15秒前進します")
                         is_stacked = False
                         if motor_ok:
-                            is_stacked = md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=True)
+                            is_stacked = md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=True)
                             print("⏹️ 停止して待機中...")
                             make_csv.print("msg", "停止して待機中...")
                             time.sleep(1.0) 
@@ -615,7 +615,7 @@ def main():
                                 prev_lat, prev_lon = recov_lat, recov_lon
                                 
                             if motor_ok:
-                                md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=False)
+                                md.move('w', power=0.7, duration=15.0, is_inverted=is_inverted, enable_stack_check=False)
                                 print("⏹️ 停止してGPSの安定を待ちます...")
                                 make_csv.print("msg", "停止してGPSの安定を待ちます...")
                                 time.sleep(1.0)
