@@ -1,6 +1,7 @@
 #---------------------------------------------------------------------
 # 未確認コードのため，入れ替え必須
 # _marge_test.py 実行用に追加(2/18)
+# オフロード（土・草）向けスタック検知対応・ijochi関数渡し版
 #---------------------------------------------------------------------
 import RPi.GPIO as GPIO  # GPIOモジュールをインポート
 from gpiozero import Motor
@@ -23,7 +24,13 @@ except Exception as e:
     print(f"Error initializing BNO055 in motordrive: {e}")
     bno = None
 
-import make_csv
+# ★ make_csvを安全にインポート
+try:
+    import make_csv
+except ImportError:
+    make_csv = None
+    print("Warning: make_csv module not found. Logging will be disabled.")
+
 import ijochi
 
 # ---------------------------------------------------------
@@ -81,7 +88,9 @@ def setup_motors():
         setup_gpio() # LEDなども一緒に準備
     except Exception as e:
         print(f"Motor Setup Error: {e}")
-        make_csv.print('serious_error', f"Motor Setup Error: {e}")
+        if make_csv:
+            try: make_csv.print('serious_error', f"Motor Setup Error: {e}")
+            except Exception: pass
         motor_right = None
         motor_left = None
 
@@ -127,6 +136,12 @@ def stop():
 
     motor_right.value = 0.0
     motor_left.value = 0.0
+    
+    # ★ 停止完了をCSVに記録
+    if make_csv:
+        try: make_csv.print('motor', (0.0, 0.0))
+        except Exception: pass
+        
     time.sleep(0.1)
 
 def move(direction, power, duration, is_inverted=False, enable_stack_check=True):
@@ -157,9 +172,10 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
     if _gpio_initialized:
         GPIO.output(PIN_VM, 1)
 
-    # 1. 逆さ判定による方向反転
+
+# 1. 逆さ判定による方向反転
     if is_inverted:
-        mapping = {'w': 's', 's': 'w', 'a': 'a', 'd': 'd', 'q': 'e', 'e': 'q'}
+        mapping = {'w': 's', 's': 'w', 'a': 'q', 'd': 'e', 'q': 'd', 'e': 'a'}
         direction = mapping.get(direction, direction)
 
     # 2. モーター値の設定関数 (内部ヘルパー)
@@ -168,14 +184,20 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
         p = min(1.0 , p) #浮動小数点の誤差で1.0を超えないように
         if d == 'w':   mr, ml = p, p
         elif d == 's': mr, ml = -p, -p
-        elif d == 'a': mr, ml = p*0.2, p  # 左旋回
-        elif d == 'd': mr, ml = p, p*0.2  # 右旋回
-        elif d == 'q': mr, ml = 0, p   # その場左
-        elif d == 'e': mr, ml = p, 0   # その場右
+        elif d == 'a': mr, ml = p*0.2, p  # 左前旋回
+        elif d == 'd': mr, ml = p, p*0.2  # 右前旋回
+        elif d == 'e': mr, ml = -p*0.2, -p   # 右後旋回
+        elif d == 'q': mr, ml = -p, -p*0.2   # 左後旋回
         else: return False
         
         motor_right.value = mr
         motor_left.value = ml
+        
+        # ★ CSVへの出力記録 (左右の出力をタプルで渡す)
+        if make_csv:
+            try: make_csv.print('motor', (ml, mr)) # 左, 右の順
+            except Exception: pass
+            
         return True
 
     # 3. 加速フェーズ
@@ -195,57 +217,49 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
     remaining_time = max(0, duration - accel_time)
     is_stacked = 0
 
-    # 4. 定速移動 & 監視フェーズ
+    # 4. 定速移動 & 監視フェーズ (オフロード対応版)
     if remaining_time > 0:
         set_values(direction, power) # 目標速度維持
 
         # スタック検知条件: 2秒以上の移動 かつ センサーあり かつ 検知有効
         if duration >= 2 and bno is not None and enable_stack_check:
             start_t = time.time()
+            stuck_start_time = None
+            STUCK_DURATION_THRESHOLD = 1.5 # 1.5秒間連続で動きがなければスタックと判定
             
             while time.time() - start_t < remaining_time:
-                # --- スタック検知 (ご要望により既存ロジックを維持) ---
-                stack_detected = True
+                is_moving = False
                 
-                # センサーチェック (5回サンプリング)
-                for _ in range(5):
-                    gyro = bno.gyroscope()
-                    # センサーエラー時は検知しない
-                    if gyro is None:
-                        stack_detected = False
-                        break
-                    
-                    # 異常値フィルタ
-                    gyro = ijochi.abnormal_check("bno", "gyro", gyro, ERROR_FLAG=False)
-                    if gyro is None:
-                        stack_detected = False
-                        break
+                # ijochiの仕様に合わせて関数を渡し、自動リトライ＆取得を任せる
+                gyro = ijochi.abnormal_check("gyro", bno.gyroscope, ERROR_FLAG=False)
+                lin_accel = ijochi.abnormal_check("accel_line", bno.linear_acceleration, ERROR_FLAG=False)
 
-                    # 判定ロジック (厳しい判定のまま維持)
+                if gyro is not None and lin_accel is not None:
                     if direction in ['a', 'd', 'q', 'e']:
-                        # 旋回中: Z軸ジャイロが動いているべき
-                        if abs(gyro[2]) > 0.4: # 閾値
-                            stack_detected = False
-                            break
+                        # 旋回中: 土や草の抵抗でゆっくり回ることを考慮し、閾値を0.2に下げる
+                        if abs(gyro[2]) > 0.2: 
+                            is_moving = True
                     else:
-                        # 直進中: 機体全体が揺れたり動いているべき
-                        if np.linalg.norm(gyro) > 0.4:
-                            stack_detected = False
-                            break
-                    
-                    time.sleep(0.05) # サンプリング間隔
+                        # 直進・後退中: 線形加速度(実際の進行) または ジャイロ(機体の揺れ) を見る
+                        # 空転時は線形加速度が落ちるためスタックと判定しやすくなる
+                        if np.linalg.norm(lin_accel) > 0.5 or np.linalg.norm(gyro) > 0.6:
+                            is_moving = True
 
-                # スタック確定時の処理
-                if stack_detected:
-                    print("Stack Detected!")
-                    make_csv.print('warning', 'stacking detected')
-                    is_stacked = 1
-                    break 
+                if is_moving:
+                    # 動いている（または揺れている）と判定されたので、スタック状態のカウントをリセット
+                    stuck_start_time = None
+                else:
+                    # 動きが検知できなかった場合、スタックのカウントを開始
+                    if stuck_start_time is None:
+                        stuck_start_time = time.time()
+                    elif time.time() - stuck_start_time >= STUCK_DURATION_THRESHOLD:
+                        # 指定時間、継続して動きが検知できなかったらスタック確定
+                        print("Stack Detected! (Off-road logic)")
+                        make_csv.print('warning', 'stacking detected')
+                        is_stacked = 1
+                        break 
 
-                # 待機 (残り時間 or 0.1秒)
-                elapsed = time.time() - start_t
-                sleep_t = max(0, min(0.1, remaining_time - elapsed))
-                time.sleep(sleep_t)
+                time.sleep(0.05) # 0.05秒間隔で監視を継続
         else:
             # 監視なしの単純待機
             time.sleep(remaining_time)
@@ -286,7 +300,9 @@ def check_stuck(is_stacked, is_inverted=False):
             
         except Exception as e:
             print(f"Error in check_stuck: {e}")
-            make_csv.print("error", f"check_stuck error: {e}")
+            if make_csv:
+                try: make_csv.print("error", f"check_stuck error: {e}")
+                except Exception: pass
 
 if __name__ == "__main__":
     # 単体テスト用
