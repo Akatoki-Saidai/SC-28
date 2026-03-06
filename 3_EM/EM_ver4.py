@@ -677,8 +677,9 @@ def main():
                                     make_csv.print("msg", "ターゲットを見失いました。探索のため右回転します。")
                                     lost_count += 1
                                     if motor_ok:
-                                        md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
-                                        
+                                        md.move('e', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        md.move("w", power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=False)
+
                                     #10回連続（約5秒間）見失ったら、GPSで現在地を確認する
                                     if lost_count >= 10:
                                         print("長時間ターゲットが見つかりません。現在地をGPSで確認します...")
@@ -723,15 +724,15 @@ def main():
                                     print("ターゲットが右です。右に旋回してから前進します。")
                                     make_csv.print("msg", "ターゲットが右です。右に旋回してから前進します。")
                                     if motor_ok:
-                                        md.move('d', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
-                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                        md.move('e', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=True)
                                         
                                 elif order == 3:
                                     print("ターゲットが左です。左に旋回してから前進します。")
                                     make_csv.print("msg", "ターゲットが左です。左に旋回してから前進します。")
                                     if motor_ok:
-                                        md.move('a', power=0.7, duration=0.5, is_inverted=is_inverted, enable_stack_check=False)
-                                        is_stacked = md.move('w', power=0.7, duration=2.0, is_inverted=is_inverted, enable_stack_check=True)
+                                        md.move('q', power=0.7, duration=3, is_inverted=is_inverted, enable_stack_check=False)
+                                        is_stacked = md.move('w', power=0.7, duration=2.5, is_inverted=is_inverted, enable_stack_check=True)
     
                                 # ④ スタック判定とリカバリー（motordriveにお任せ）
                                 if motor_ok and is_stacked:
