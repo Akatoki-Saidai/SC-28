@@ -257,8 +257,8 @@ def close_camera(cam):
 def main():
 
     # --- 設定 ---
-    #本番ゴール地点30.4742606, 130.9599502
-    GOAL_LAT = 30.4742606
+    #本番ゴール地点30.3742606, 130.9599502
+    GOAL_LAT = 30.3742606
     GOAL_LON = 130.9599502
 
     bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
@@ -289,7 +289,7 @@ def main():
 
     last_image_save_time = 0
 
-    phase = 4
+    phase = 1
     make_csv.print("msg","start phase1")
     make_csv.print("phase","1")
 
