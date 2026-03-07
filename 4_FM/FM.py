@@ -257,9 +257,9 @@ def close_camera(cam):
 def main():
 
     # --- 設定 ---
-    #あおぞら広場赤い馬30.4153855, 130.9013989
-    GOAL_LAT = 30.4153855
-    GOAL_LON = 130.9013989
+    #本番ゴール地点30.4742606, 130.9599502
+    GOAL_LAT = 30.4742606
+    GOAL_LON = 130.9599502
 
     bno, bme, qnh, motor_ok, gpio_ok = setup_sensors()
     cam = None
