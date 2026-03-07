@@ -641,17 +641,66 @@ def main():
                     if not cam:
                         print("カメラのセットアップ開始")
                         make_csv.print("msg", "カメラのセットアップ開始")
-                        cam = setup_camera()
-                        print("カメラのセットアップ完了")
-                        make_csv.print("msg", "カメラのセットアップ完了")
+                        
+                        # ★統合版：カメラセットアップのリトライ処理
+                        MAX_CAMERA_RETRIES = 5
+                        for attempt in range(MAX_CAMERA_RETRIES):
+                            cam = setup_camera()
+                            if cam:
+                                print(f"✅ カメラのセットアップ完了 (試行回数: {attempt + 1})")
+                                make_csv.print("msg", f"カメラのセットアップ完了 (試行回数: {attempt + 1})")
+                                break
+                            else:
+                                print(f"⚠️ カメラセットアップ失敗。再試行します... ({attempt + 1}/{MAX_CAMERA_RETRIES})")
+                                make_csv.print("warning", f"カメラセットアップ失敗。再試行します... ({attempt + 1}/{MAX_CAMERA_RETRIES})")
+                                time.sleep(2.0)  # OSにデバイス認識の猶予を与える
 
                     if not cam:
-                        print("カメラが認識されていません。フェーズ4をスキップします。")
-                        make_csv.print("error", "カメラが認識されていません。フェーズ4をスキップします。")
+                        # ★統合版：カメラが完全に死んだ場合、現在のGPS状況を確認して運命を決める
+                        print("❌ 規定回数試行しましたが、カメラが認識されません。現在のGPS状況を確認します。")
+                        make_csv.print("error", "規定回数試行しましたが、カメラが認識されません。現在のGPS状況を確認します。")
+                        
+                        gps_data = ijochi.abnormal_check(["lat", "lon"], idokeido, ERROR_FLAG=False, max_retries=10, retry_delay=1)
+                        if gps_data is not None:
+                            curr_lat, curr_lon = gps_data
+                        else:
+                            curr_lat, curr_lon = None, None
+
+                        if curr_lat is not None and curr_lon is not None:
+                            # GPSが取れた場合、ゴールまでの距離を計算
+                            d, _ = calculate_distance_and_angle(curr_lat, curr_lon, curr_lat, curr_lon, GOAL_LAT, GOAL_LON)
+                            print(f"📍 GPS取得成功。ゴールまでの距離: {d:.2f}m")
+                            make_csv.print("msg", f"GPS取得成功。ゴールまでの距離: {d:.2f}m")
+                            
+                            if d <= 10.0:
+                                print("🌟 カメラは故障していますが、GPSで10m圏内であることが確認できました。ゴールと判定します！")
+                                make_csv.print("msg", "カメラは故障していますが、GPSで10m圏内であることが確認できました。ゴールと判定します！")
+                                phase = 5
+                                make_csv.print("phase", "5")
+                                continue
+                            else:
+                                print("⚠️ 10m圏外のため、GPS誘導（フェーズ3）に戻ります。")
+                                make_csv.print("warning", "10m圏外のため、GPS誘導（フェーズ3）に戻ります。")
+                                phase = 3
+                                make_csv.print("phase", "3")
+                                continue
+                        else:
+                            # GPSも取れない場合（GPSロストでフェーズ4に来た場合など）
+                            print("❌ GPSも取得できません。環境を変えるためブラインド前進を行い、フェーズ3へ戻ります。")
+                            make_csv.print("error", "GPSも取得できません。環境を変えるためブラインド前進を行い、フェーズ3へ戻ります。")
+                            if motor_ok:
+                                is_inverted = False
+                                if bno:
+                                    gravity = ijochi.abnormal_check("grav", bno.gravity, ERROR_FLAG=False)
+                                    is_inverted = (gravity is not None and gravity[2] < -2.0)
+                                md.move('w', power=0.7, duration=5.0, is_inverted=is_inverted, enable_stack_check=True)
+                            
+                            phase = 3
+                            make_csv.print("phase", "3")
+                            continue
                     else:
                         is_inverted = False
                         lost_count = 0 #ターゲットを見失った連続回数をカウントする変数
-                        
                         while phase == 4:
                             try:
                                 #裏返り判定
