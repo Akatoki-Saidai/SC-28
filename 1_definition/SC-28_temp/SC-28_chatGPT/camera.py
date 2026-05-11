@@ -1,3 +1,4 @@
+#講習用
 # Modified for CanSat SC-28 (Final Production V2) - FIXED
 # Fixes:
 # - OpenCV findContours compatibility (2/3 return values)
