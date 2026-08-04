@@ -244,8 +244,8 @@ def move(direction, power, duration, is_inverted=False, enable_stack_check=True)
                 is_moving = False
                 
                 # ijochiの仕様に合わせて関数を渡し、自動リトライ＆取得を任せる
-                gyro = ijochi.abnormal_check("gyro", bno.gyroscope, ERROR_FLAG=False)
-                lin_accel = ijochi.abnormal_check("accel_line", bno.linear_acceleration, ERROR_FLAG=False)
+                gyro = ijochi.abnormal_check("gyro", lambda: bno.gyroscope(), ERROR_FLAG=False)
+                lin_accel = ijochi.abnormal_check("accel_line", lambda: bno.linear_acceleration(), ERROR_FLAG=False)
 
                 if gyro is not None and lin_accel is not None:
                     if direction in ['a', 'd', 'q', 'e']:
